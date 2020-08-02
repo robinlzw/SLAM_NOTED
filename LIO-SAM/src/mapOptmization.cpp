@@ -225,6 +225,7 @@ public:
         matP.setZero();
     }
 
+    // 接受 corner 和 surf
     void laserCloudInfoHandler(const lio_sam::cloud_infoConstPtr& msgIn)
     {
         // extract time stamp
@@ -730,10 +731,11 @@ public:
     
 
 
-
+    // 更新初始值
     void updateInitialGuess()
     {
         // save current transformation before any processing
+        // 处理前，保存当前位姿
         incrementalOdometryAffineFront = trans2Affine3f(transformTobeMapped);
 
         static Eigen::Affine3f lastImuTransformation;
@@ -747,6 +749,7 @@ public:
             if (!useImuHeadingInitialization)
                 transformTobeMapped[2] = 0;
 
+            // 保存imu的transformation
             lastImuTransformation = pcl::getTransformation(0, 0, 0, cloudInfo.imuRollInit, cloudInfo.imuPitchInit, cloudInfo.imuYawInit); // save imu before return;
             return;
         }

@@ -75,6 +75,7 @@ public:
         return pcl::getTransformation(x, y, z, roll, pitch, yaw);
     }
 
+    // 记录lidarOdom
     void lidarOdometryHandler(const nav_msgs::Odometry::ConstPtr& odomMsg)
     {
         std::lock_guard<std::mutex> lock(mtx);
@@ -153,6 +154,33 @@ public:
     }
 };
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// IMU与积分
 class IMUPreintegration : public ParamServer
 {
 public:
