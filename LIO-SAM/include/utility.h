@@ -220,22 +220,54 @@ public:
         usleep(100);
     }
 
+    // 做IMU数据的坐标转换
     sensor_msgs::Imu imuConverter(const sensor_msgs::Imu& imu_in)
     {
+        /*
+        这里要把 lidar imu 坐标系对齐
+
+        作者所用设备
+
+        加速度坐标系：
+        lidar frame：x-前  y-左  z-上
+        IMU   frame：x-后  y-左  z-下
+
+        欧拉角坐标系：
+        IMU 绕z轴转-90度 得到 lidar frame下的 RPY
+
+        lidar frame 到 IMU frame 相当于 绕 lidar的z轴转了90度
+
+        即 euler_l = R_LI * euler_i
+
+        所以根据 Rot = [c  s  0
+                      -s  c  0
+                       0  0  1]
+        代入 90 度
+
+        extRot: [-1, 0, 0,
+                 0, 1, 0,
+                 0, 0, -1]
+        extQRPY: [0, 1, 0,
+                 -1, 0, 0,
+                  0, 0, 1]
+        */
         sensor_msgs::Imu imu_out = imu_in;
         // rotate acceleration
+        // 旋转加速度
         Eigen::Vector3d acc(imu_in.linear_acceleration.x, imu_in.linear_acceleration.y, imu_in.linear_acceleration.z);
         acc = extRot * acc;
         imu_out.linear_acceleration.x = acc.x();
         imu_out.linear_acceleration.y = acc.y();
         imu_out.linear_acceleration.z = acc.z();
         // rotate gyroscope
+        // 旋转角速度
         Eigen::Vector3d gyr(imu_in.angular_velocity.x, imu_in.angular_velocity.y, imu_in.angular_velocity.z);
         gyr = extRot * gyr;
         imu_out.angular_velocity.x = gyr.x();
         imu_out.angular_velocity.y = gyr.y();
         imu_out.angular_velocity.z = gyr.z();
         // rotate roll pitch yaw
+        // 旋转 r p y
         Eigen::Quaterniond q_from(imu_in.orientation.w, imu_in.orientation.x, imu_in.orientation.y, imu_in.orientation.z);
         Eigen::Quaterniond q_final = q_from * extQRPY;
         imu_out.orientation.x = q_final.x();
@@ -243,6 +275,7 @@ public:
         imu_out.orientation.z = q_final.z();
         imu_out.orientation.w = q_final.w();
 
+        // 模长很小，认为异常
         if (sqrt(q_final.x()*q_final.x() + q_final.y()*q_final.y() + q_final.z()*q_final.z() + q_final.w()*q_final.w()) < 0.1)
         {
             ROS_ERROR("Invalid quaternion, please use a 9-axis IMU!");

@@ -89,7 +89,9 @@ public:
     ImageProjection():
     deskewFlag(0)
     {
+        // 原始 imu 数据，这里的 imu 是用来去加速度畸变的
         subImu        = nh.subscribe<sensor_msgs::Imu>(imuTopic, 2000, &ImageProjection::imuHandler, this, ros::TransportHints().tcpNoDelay());
+        // odometry/imu_incremental  预计分出来的数据
         subOdom       = nh.subscribe<nav_msgs::Odometry>(odomTopic+"_incremental", 2000, &ImageProjection::odometryHandler, this, ros::TransportHints().tcpNoDelay());
         subLaserCloud = nh.subscribe<sensor_msgs::PointCloud2>(pointCloudTopic, 5, &ImageProjection::cloudHandler, this, ros::TransportHints().tcpNoDelay());
 
@@ -267,6 +269,7 @@ public:
             return false;
         }
 
+        // 对imu原始数据做积分
         imuDeskewInfo();
 
         odomDeskewInfo();
@@ -274,10 +277,13 @@ public:
         return true;
     }
 
+    // 对imu原始数据做积分
+    // cloudInfo.imuRollInit 是每帧激光对应的起始imu RPY
     void imuDeskewInfo()
     {
         cloudInfo.imuAvailable = false;
 
+        // 早于 timeScanCur 的 imu数据 丢掉
         while (!imuQueue.empty())
         {
             if (imuQueue.front().header.stamp.toSec() < timeScanCur - 0.01)
@@ -297,6 +303,7 @@ public:
             double currentImuTime = thisImuMsg.header.stamp.toSec();
 
             // get roll, pitch, and yaw estimation for this scan
+            // 最终存在 cloudInfo 里的值，是当前帧起始位置对应的imu  RPY
             if (currentImuTime <= timeScanCur)
                 imuRPY2rosRPY(&thisImuMsg, &cloudInfo.imuRollInit, &cloudInfo.imuPitchInit, &cloudInfo.imuYawInit);
 
@@ -333,10 +340,13 @@ public:
         cloudInfo.imuAvailable = true;
     }
 
+    // 对imu预计分odometry_incremental
+    //  cloudInfo.initialGuess 是根据odom_incremental得到的起始值
     void odomDeskewInfo()
     {
         cloudInfo.odomAvailable = false;
 
+        // 清除timeScanCur前的
         while (!odomQueue.empty())
         {
             if (odomQueue.front().header.stamp.toSec() < timeScanCur - 0.01)
@@ -406,7 +416,7 @@ public:
         tf::quaternionMsgToTF(endOdomMsg.pose.pose.orientation, orientation);
         tf::Matrix3x3(orientation).getRPY(roll, pitch, yaw);
         Eigen::Affine3f transEnd = pcl::getTransformation(endOdomMsg.pose.pose.position.x, endOdomMsg.pose.pose.position.y, endOdomMsg.pose.pose.position.z, roll, pitch, yaw);
-
+        // transBt 是当前帧 起始到结束期间的trans
         Eigen::Affine3f transBt = transBegin.inverse() * transEnd;
 
         float rollIncre, pitchIncre, yawIncre;
@@ -415,11 +425,13 @@ public:
         odomDeskewFlag = true;
     }
 
+    // 找到pointTime对应的Rotation
     void findRotation(double pointTime, float *rotXCur, float *rotYCur, float *rotZCur)
     {
         *rotXCur = 0; *rotYCur = 0; *rotZCur = 0;
 
         int imuPointerFront = 0;
+        // 找到正好大于pointTime的imu数据
         while (imuPointerFront < imuPointerCur)
         {
             if (pointTime < imuTime[imuPointerFront])
@@ -458,6 +470,7 @@ public:
         // *posZCur = ratio * odomIncreZ;
     }
 
+    // 矫正畸变点云
     PointType deskewPoint(PointType *point, double relTime)
     {
         if (deskewFlag == -1 || cloudInfo.imuAvailable == false)
@@ -471,6 +484,7 @@ public:
         float posXCur, posYCur, posZCur;
         findPosition(relTime, &posXCur, &posYCur, &posZCur);
 
+        // 记录当前帧第一个点，也就是帧的初始位置
         if (firstPointFlag == true)
         {
             transStartInverse = (pcl::getTransformation(posXCur, posYCur, posZCur, rotXCur, rotYCur, rotZCur)).inverse();
@@ -478,9 +492,11 @@ public:
         }
 
         // transform points to start
+        // 得到相对当前帧初始位置的，Transformation，transBt
         Eigen::Affine3f transFinal = pcl::getTransformation(posXCur, posYCur, posZCur, rotXCur, rotYCur, rotZCur);
         Eigen::Affine3f transBt = transStartInverse * transFinal;
 
+        // 做矫正的变换
         PointType newPoint;
         newPoint.x = transBt(0,0) * point->x + transBt(0,1) * point->y + transBt(0,2) * point->z + transBt(0,3);
         newPoint.y = transBt(1,0) * point->x + transBt(1,1) * point->y + transBt(1,2) * point->z + transBt(1,3);
@@ -527,6 +543,7 @@ public:
             if (rangeMat.at<float>(rowIdn, columnIdn) != FLT_MAX)
                 continue;
 
+            // 每个point都有对应的时间？？？ 没看到在哪儿算的
             thisPoint = deskewPoint(&thisPoint, laserCloudIn->points[i].time); // Velodyne
             // thisPoint = deskewPoint(&thisPoint, (float)laserCloudIn->points[i].t / 1000000000.0); // Ouster
 
