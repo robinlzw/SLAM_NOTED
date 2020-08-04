@@ -559,22 +559,30 @@ public:
         }
 
         // Get pose transformation
+        // 获取当前 key frame 到闭环帧的位姿变换
         float x, y, z, roll, pitch, yaw;
         Eigen::Affine3f correctionLidarFrame;
         correctionLidarFrame = icp.getFinalTransformation();
         // transform from world origin to wrong pose
+        // 矫正前的错误位姿
         Eigen::Affine3f tWrong = pclPointToAffine3f(copy_cloudKeyPoses6D->points[loopKeyCur]);
         // transform from world origin to corrected pose
+        // 校正后的位姿
         Eigen::Affine3f tCorrect = correctionLidarFrame * tWrong;// pre-multiplying -> successive rotation about a fixed frame
         pcl::getTranslationAndEulerAngles (tCorrect, x, y, z, roll, pitch, yaw);
         gtsam::Pose3 poseFrom = Pose3(Rot3::RzRyRx(roll, pitch, yaw), Point3(x, y, z));
         gtsam::Pose3 poseTo = pclPointTogtsamPose3(copy_cloudKeyPoses6D->points[loopKeyPre]);
         gtsam::Vector Vector6(6);
+        // 该因子的噪声是ICP的方差
         float noiseScore = icp.getFitnessScore();
         Vector6 << noiseScore, noiseScore, noiseScore, noiseScore, noiseScore, noiseScore;
         noiseModel::Diagonal::shared_ptr constraintNoise = noiseModel::Diagonal::Variances(Vector6);
 
         // Add pose constraint
+        // 添加pose约束：
+        // 产生约束的关键帧ID
+        // poseFrom 校正后的  poseTo 闭环点位姿
+        // 约束噪声
         mtx.lock();
         loopIndexQueue.push_back(make_pair(loopKeyCur, loopKeyPre));
         loopPoseQueue.push_back(poseFrom.between(poseTo));
@@ -582,6 +590,8 @@ public:
         mtx.unlock();
 
         // add loop constriant
+        // 闭环约束
+        // 记录当前key frame发生过闭环，之后再对该frame添加闭环约束
         loopIndexContainer[loopKeyCur] = loopKeyPre;
     }
 
@@ -1388,6 +1398,7 @@ public:
         return true;
     }
 
+    // 添加 odom 因子，
     void addOdomFactor()
     {
         if (cloudKeyPoses3D->points.empty())
@@ -1419,6 +1430,8 @@ public:
         }
 
         // pose covariance small, no need to correct
+        // isam->marginalCovarianc(isamCurrentEstimate.size()-1)得到的
+        // poseCovariance 参数默认值 25
         if (poseCovariance(3,3) < poseCovThreshold && poseCovariance(4,4) < poseCovThreshold)
             return;
 
@@ -1446,6 +1459,7 @@ public:
                 float noise_x = thisGPS.pose.covariance[0];
                 float noise_y = thisGPS.pose.covariance[7];
                 float noise_z = thisGPS.pose.covariance[14];
+                // gpsCovThreshold 参数默认这 2
                 if (noise_x > gpsCovThreshold || noise_y > gpsCovThreshold)
                     continue;
 
@@ -1463,6 +1477,7 @@ public:
                     continue;
 
                 // Add GPS every a few meters
+                // 每过5m，添加GPS因子
                 PointType curGPSPoint;
                 curGPSPoint.x = gps_x;
                 curGPSPoint.y = gps_y;
@@ -1495,6 +1510,7 @@ public:
             int indexTo = loopIndexQueue[i].second;
             gtsam::Pose3 poseBetween = loopPoseQueue[i];
             gtsam::noiseModel::Diagonal::shared_ptr noiseBetween = loopNoiseQueue[i];
+            // curFrame  preFrame  帧间变换  noise
             gtSAMgraph.add(BetweenFactor<Pose3>(indexFrom, indexTo, poseBetween, noiseBetween));
         }
 
@@ -1574,7 +1590,7 @@ public:
         // cout << "Pose covariance:" << endl;
         // cout << isam->marginalCovariance(isamCurrentEstimate.size()-1) << endl << endl;
 
-        // 边缘化了最新以帧？？？？？？
+        // 边缘化了最新一帧？？？？？？得到协方差？？？？
         // poseCovariance 协方差用来判断是否需要加入 GPS factor
         poseCovariance = isam->marginalCovariance(isamCurrentEstimate.size()-1);
 

@@ -43,6 +43,7 @@ public:
 
     TransformFusion()
     {
+        // 默认 lidarFrome和baselnkFrame相同，如果不同需要订阅一个TF
         if(lidarFrame != baselinkFrame)
         {
             try
@@ -56,7 +57,7 @@ public:
             }
         }
 
-        // 订阅 mapping结果 和 IMU积分增量
+        // 订阅 mapping的全局位姿 和 IMU预积分增量
         subLaserOdometry = nh.subscribe<nav_msgs::Odometry>("lio_sam/mapping/odometry", 5, &TransformFusion::lidarOdometryHandler, this, ros::TransportHints().tcpNoDelay());
         subImuOdometry   = nh.subscribe<nav_msgs::Odometry>(odomTopic+"_incremental",   2000, &TransformFusion::imuOdometryHandler,   this, ros::TransportHints().tcpNoDelay());
 
@@ -99,8 +100,10 @@ public:
         imuOdomQueue.push_back(*odomMsg);
 
         // get latest odometry (at current IMU stamp)
+        // 获取当前IMU时间戳上的，mapping odometry
         if (lidarOdomTime == -1)
             return;
+        // 保证imu front()和lidarOdomTime对齐
         while (!imuOdomQueue.empty())
         {
             if (imuOdomQueue.front().header.stamp.toSec() <= lidarOdomTime)
@@ -108,6 +111,7 @@ public:
             else
                 break;
         }
+        // 用IMU的增量给lidarOdom插值
         Eigen::Affine3f imuOdomAffineFront = odom2affine(imuOdomQueue.front());
         Eigen::Affine3f imuOdomAffineBack = odom2affine(imuOdomQueue.back());
         Eigen::Affine3f imuOdomAffineIncre = imuOdomAffineFront.inverse() * imuOdomAffineBack;
@@ -129,7 +133,9 @@ public:
         tf::poseMsgToTF(laserOdometry.pose.pose, tCur);
         if(lidarFrame != baselinkFrame)
             tCur = tCur * lidar2Baselink;
+        // odom -> base_link 的TF
         tf::StampedTransform odom_2_baselink = tf::StampedTransform(tCur, odomMsg->header.stamp, odometryFrame, baselinkFrame);
+        // 默认情况下 这个TF就是laserOdometry本身
         tfOdom2BaseLink.sendTransform(odom_2_baselink);
 
         // publish IMU path
