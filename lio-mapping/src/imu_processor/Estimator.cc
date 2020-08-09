@@ -471,12 +471,15 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
   LaserTransform的成员：
   double time;
   Transform transform;
-  shared_ptr<IntegrationBase> pre_integration;
+  shared_ptr<IntegrationBase> pre_integration; 
+
+  ****************  注意pre_integration这一项，存了一帧激光对应的预计分信息
 
   还有一个基于此的类型定义
   typedef pair<double, LaserTransform> PairTimeLaserTransform;
   */
 
+  // 存了 时间戳 + 当前位姿
   LaserTransform laser_transform(header.stamp.toSec(), transform_in);
 
   laser_transform.pre_integration = tmp_pre_integration_;
@@ -525,6 +528,7 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
 
   if (estimator_config_.run_optimization) {
     switch (stage_flag_) {
+      // 检测是否初始化
       case NOT_INITED: {
 
         {
@@ -538,23 +542,35 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
         }
 
         bool init_result = false;
+        // 如果接受的有有效激光数量达到了 window_size
         if (cir_buf_count_ == estimator_config_.window_size) {
           tic_toc_.Tic();
 
+          // 不用imu，范例配置信息里，imu_factor都为1
+          // 也就是，直到window填满，才初始化完成
           if (!estimator_config_.imu_factor) {
             init_result = true;
             // TODO: update states Ps_
+            // 更新Ps和Rs，之前完全是imu积分得到的
             for (size_t i = 0; i < estimator_config_.window_size + 1;
                  ++i) {
+              // trans_li 是lidar的位姿
               const Transform &trans_li = all_laser_transforms_[i].second.transform;
+              // trans_bi 是inertial位姿，也就是imu位姿
               Transform trans_bi = trans_li * transform_lb_;
               Ps_[i] = trans_bi.pos.template cast<double>();
               Rs_[i] = trans_bi.rot.normalized().toRotationMatrix().template cast<double>();
             }
-          } else {
 
+
+          // 所以这里才是使用imu数据，初始化代码
+          } else {
+            // extrinsic_stage_初始值为2
+            // 所以是两部初始化
+            // 第一步：进行lidar和imu的外参标定
             if (extrinsic_stage_ == 2) {
               // TODO: move before initialization
+              // imu初始化，得到外部标定
               bool extrinsic_result = ImuInitializer::EstimateExtrinsicRotation(all_laser_transforms_, transform_lb_);
               LOG(INFO) << ">>>>>>> extrinsic calibration"
                         << (extrinsic_result ? " successful"
@@ -566,6 +582,7 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
               }
             }
 
+            // 
             if (extrinsic_stage_ != 2 && (header.stamp.toSec() - initial_time_) > 0.1) {
               DLOG(INFO) << "EXTRINSIC STAGE: " << extrinsic_stage_;
               init_result = RunInitialization();
@@ -654,6 +671,9 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
 
         break;
       }
+
+
+      // 已初始化后的处理
       case INITED: {
 
         // TODO
@@ -902,6 +922,7 @@ void Estimator::ProcessCompactData(const sensor_msgs::PointCloud2ConstPtr &compa
 
 }
 
+// 
 bool Estimator::RunInitialization() {
 
   // NOTE: check IMU observibility, adapted from VINS-mono
@@ -913,15 +934,20 @@ bool Estimator::RunInitialization() {
          ++i) {
       laser_trans_j = all_laser_transforms_[i + 1];
 
+      // 获取lidar帧间总时间
       double dt = laser_trans_j.second.pre_integration->sum_dt_;
+      // tmp_g 是两帧scan的加速度平均值
       Vector3d tmp_g = laser_trans_j.second.pre_integration->delta_v_ / dt;
+      // 累加
       sum_g += tmp_g;
     }
 
+    // 算出来 slidewindow 内，所有帧的加速的平均值
     Vector3d aver_g;
     aver_g = sum_g * 1.0 / (estimator_config_.window_size);
     double var = 0;
 
+    // 求当前window内，各帧加速度的方差
     for (size_t i = 0; i < estimator_config_.window_size;
          ++i) {
       laser_trans_j = all_laser_transforms_[i + 1];
@@ -934,6 +960,7 @@ bool Estimator::RunInitialization() {
 
     DLOG(INFO) << "IMU variation: " << var;
 
+    // 需要有足够的运动，即方差足够大，才返回true
     if (var < 0.25) {
       ROS_INFO("IMU excitation not enough!");
       return false;
@@ -952,12 +979,15 @@ bool Estimator::RunInitialization() {
   // TODO: update states Ps_
   for (size_t i = 0; i < estimator_config_.window_size + 1;
        ++i) {
+    // trans_li 是lidar的位姿
     const Transform &trans_li = all_laser_transforms_[i].second.transform;
+    // trans_bi 是body的位姿（即imu的位姿）
     Transform trans_bi = trans_li * transform_lb_;
     Ps_[i] = trans_bi.pos.template cast<double>();
     Rs_[i] = trans_bi.rot.normalized().toRotationMatrix().template cast<double>();
 
     //region fix the map
+    // 固定地图
 #ifdef FIX_MAP
     Ps_linearized_[i] = Ps_[i];
     Rs_linearized_[i] = Rs_[i];

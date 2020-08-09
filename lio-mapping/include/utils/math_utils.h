@@ -127,6 +127,7 @@ inline Eigen::Quaternion<typename Derived::Scalar> DeltaQ(const Eigen::MatrixBas
   return dq;
 }
 
+// 返回输入对应的反对称阵
 template<typename Derived>
 inline Eigen::Matrix<typename Derived::Scalar, 3, 3> SkewSymmetric(const Eigen::MatrixBase<Derived> &v3d) {
   Eigen::Matrix<typename Derived::Scalar, 3, 3> m;

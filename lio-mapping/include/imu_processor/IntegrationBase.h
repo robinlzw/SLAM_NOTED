@@ -102,6 +102,7 @@ class IntegrationBase {
     noise_.block<3, 3>(15, 15) = (config_.gyr_w * config_.gyr_w) * Matrix3d::Identity();
   }
 
+  // 添加新的 加速的a（acc） 角速度w（gyr） 时间间隔 gyr
   void push_back(double dt, const Vector3d &acc, const Vector3d &gyr) {
     dt_buf_.push_back(dt);
     acc_buf_.push_back(acc);
@@ -126,6 +127,7 @@ class IntegrationBase {
     }
   }
 
+  // 中值积分
   void MidPointIntegration(double dt,
                            const Vector3d &acc0, const Vector3d &gyr0,
                            const Vector3d &acc1, const Vector3d &gyr1,
@@ -138,34 +140,58 @@ class IntegrationBase {
     //ROS_DEBUG("midpoint integration");
 
     // NOTE: the un_acc here is different from the un_acc in the Estimator
+    // 更新 PVQ
+    // a0 = qk * (ak - ba)
     Vector3d un_acc_0 = delta_q * (acc0 - linearized_ba);
+    // w = 0.5 * (wk + wk+1) - bg
     Vector3d un_gyr = 0.5 * (gyr0 + gyr1) - linearized_bg;
+    // qk+1 = qk * [1, 0.5 * w * dt]
     result_delta_q = delta_q * Quaterniond(1, un_gyr(0) * dt / 2, un_gyr(1) * dt / 2, un_gyr(2) * dt / 2);
+    // a1 = qk+1 * (ak+1 - ba)
     Vector3d un_acc_1 = result_delta_q * (acc1 - linearized_ba);
+    // a = 0.5 * (a0 + a1)
     Vector3d un_acc = 0.5 * (un_acc_0 + un_acc_1);
+    // Pk+1 = Pk + vk * dt + 0.5 * a * dt^2
     result_delta_p = delta_p + delta_v * dt + 0.5 * un_acc * dt * dt;
+    // Vk+1 = Vk + a * dt
     result_delta_v = delta_v + un_acc * dt;
+    // 这里的bias，一次预积分内，认为不变？？？？？？？
+    // bak+1 = bak
     result_linearized_ba = linearized_ba;
+    // bgk+1 = bgk
     result_linearized_bg = linearized_bg;
 
+    // 更新雅可比
+    // 即不确定度
     if (update_jacobian) {
+      // w_x = 0.5 * (wk + wk+1) - bg
       Vector3d w_x = 0.5 * (gyr0 + gyr1) - linearized_bg;
+      // a0 = ak - ba
       Vector3d a_0_x = acc0 - linearized_ba;
+      // a1 = ak+1 - ba
       Vector3d a_1_x = acc1 - linearized_ba;
       Matrix3d R_w_x, R_a_0_x, R_a_1_x;
 
+      // R_w_x是w_x转成反对称阵形式
       R_w_x << 0, -w_x(2), w_x(1),
           w_x(2), 0, -w_x(0),
           -w_x(1), w_x(0), 0;
+      // R_a_0_x 是 a_0_x 的矩阵形式
       R_a_0_x << 0, -a_0_x(2), a_0_x(1),
           a_0_x(2), 0, -a_0_x(0),
           -a_0_x(1), a_0_x(0), 0;
+      // R_a_1_x 是 a_1_x 的矩阵形式
       R_a_1_x << 0, -a_1_x(2), a_1_x(1),
           a_1_x(2), 0, -a_1_x(0),
           -a_1_x(1), a_1_x(0), 0;
 
+      // 如下是计算误差传递公式中的 F 和 V（G）
+      // 误差 = 前一状态状态过来的 + 当前噪声
+
       // NOTE: F = Fd = \Phi = I + dF*dt
+      // 前一状态传递过来的 有5个量 a w v ba bg
       MatrixXd F = MatrixXd::Zero(15, 15);
+      // 第一行 加速度 a 对各项求导
       F.block<3, 3>(0, 0) = Matrix3d::Identity();
       F.block<3, 3>(0, 3) = -0.25 * delta_q.toRotationMatrix() * R_a_0_x * dt * dt +
           -0.25 * result_delta_q.toRotationMatrix() * R_a_1_x * (Matrix3d::Identity() - R_w_x * dt) * dt * dt;
@@ -173,19 +199,24 @@ class IntegrationBase {
       F.block<3, 3>(0, 9) = -0.25 * (delta_q.toRotationMatrix() + result_delta_q.toRotationMatrix()) * dt * dt;
 //      F.block<3, 3>(0, 12) = -0.25 * result_delta_q.toRotationMatrix() * R_a_1_x * dt * dt * -dt;
       F.block<3, 3>(0, 12) = -0.1667 * result_delta_q.toRotationMatrix() * R_a_1_x * dt * dt * -dt;
+      // 第二行 角度对 q 对各项求导
       F.block<3, 3>(3, 3) = Matrix3d::Identity() - R_w_x * dt;
       F.block<3, 3>(3, 12) = -1.0 * MatrixXd::Identity(3, 3) * dt;
+      // 第三行 速度 v 对各项求导
       F.block<3, 3>(6, 3) = -0.5 * delta_q.toRotationMatrix() * R_a_0_x * dt +
           -0.5 * result_delta_q.toRotationMatrix() * R_a_1_x * (Matrix3d::Identity() - R_w_x * dt) * dt;
       F.block<3, 3>(6, 6) = Matrix3d::Identity();
       F.block<3, 3>(6, 9) = -0.5 * (delta_q.toRotationMatrix() + result_delta_q.toRotationMatrix()) * dt;
       F.block<3, 3>(6, 12) = -0.5 * result_delta_q.toRotationMatrix() * R_a_1_x * dt * -dt;
+      // 第四行 加速度bias 对各项求导
       F.block<3, 3>(9, 9) = Matrix3d::Identity();
+      // 第五行 角速度bias 对各项求导
       F.block<3, 3>(12, 12) = Matrix3d::Identity();
       //cout<<"A"<<endl<<A<<endl;
 
       // NOTE: V = Fd * G_c
       // FIXME: verify if it is right, the 0.25 part
+      // 当前积分的观测不确定度 有6个量 nak ngk nak+1 ngk+1 nbak nbgk
       MatrixXd V = MatrixXd::Zero(15, 18);
 //      V.block<3, 3>(0, 0) = 0.25 * delta_q.toRotationMatrix() * dt * dt;
       V.block<3, 3>(0, 0) = 0.5 * delta_q.toRotationMatrix() * dt * dt;
@@ -204,7 +235,9 @@ class IntegrationBase {
 
       //step_jacobian = F;
       //step_V = V;
+      // 雅可比
       jacobian_ = F * jacobian_;
+      // 协方差是 如下形式 
       covariance_ = F * covariance_ * F.transpose() + V * noise_ * V.transpose();
     }
 
@@ -277,6 +310,10 @@ class IntegrationBase {
 
   }
 
+
+  // 
+  // acc1_  gyr1_  当前帧的 加速度 角速度
+  // acc0_  gyr0_  上一帧的 加速度 角速度
   void Propagate(double dt, const Vector3d &acc1, const Vector3d &gyr1) {
     dt_ = dt;
     acc1_ = acc1;
@@ -372,11 +409,16 @@ class IntegrationBase {
 //  Matrix<double, 15, 18> step_V;
   Matrix<double, 18, 18> noise_;
 
+  // 预积分的总时间（两帧lidar之间有100帧imu，就是这100帧的时间）
   double sum_dt_;
+  // 位姿变化量 P
   Vector3d delta_p_;
+  // 角度变化量 Q
   Quaterniond delta_q_;
+  // 速度变化量 V
   Vector3d delta_v_;
 
+  // 存了这次预计分中，所有的imu数据
   std::vector<double> dt_buf_;
   std::vector<Vector3d> acc_buf_;
   std::vector<Vector3d> gyr_buf_;

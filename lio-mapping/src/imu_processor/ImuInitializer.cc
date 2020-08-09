@@ -364,8 +364,10 @@ bool ImuInitializer::EstimateExtrinsicRotation(CircularBuffer<PairTimeLaserTrans
     PairTimeLaserTransform &laser_trans_i = all_laser_transforms[i];
     PairTimeLaserTransform &laser_trans_j = all_laser_transforms[i + 1];
 
+    // imu增量
     Eigen::Quaterniond delta_qij_imu = laser_trans_j.second.pre_integration->delta_q_;
 
+    // lidar增量
     Eigen::Quaterniond delta_qij_laser
         = (laser_trans_i.second.transform.rot.conjugate() * laser_trans_j.second.transform.rot).template cast<double>();
 

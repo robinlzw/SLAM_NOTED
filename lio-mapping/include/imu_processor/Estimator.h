@@ -241,9 +241,13 @@ class Estimator : public MeasurementManager, public PointMapping {
   ///< optimization buffers
 
 //  Transform transform_lb_{Eigen::Quaternionf(1, 0, 0, 0), Eigen::Vector3f(-0.05, 0, 0.05)}; ///< Base to laser transform
+  // base 2 laser 的变换阵
   Transform transform_lb_{Eigen::Quaternionf(1, 0, 0, 0), Eigen::Vector3f(0, 0, -0.1)}; ///< Base to laser transform
 
+  // 默认值为不旋转
+  // inertial frame 到 world frame的旋转R
   Eigen::Matrix3d R_WI_; ///< R_WI is the rotation from the inertial frame into Lidar's world frame
+  // inertial frame 到 world frame的旋转旋转q
   Eigen::Quaterniond Q_WI_; ///< Q_WI is the rotation from the inertial frame into Lidar's world frame
 
   tf::StampedTransform wi_trans_, laser_local_trans_, laser_predict_trans_;
