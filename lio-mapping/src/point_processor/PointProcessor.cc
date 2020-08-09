@@ -99,25 +99,30 @@ void PointProcessor::Process() {
   PublishResults();
 }
 
+// 点云的回调函数
 void PointProcessor::PointCloudHandler(const sensor_msgs::PointCloud2ConstPtr &raw_points_msg) {
 
   // fetch new input cloud
+  // 32线 64线 都是 false  320线是true
   if (uneven_ == false) {
     PointCloud laser_cloud_in;
     pcl::fromROSMsg(*raw_points_msg, laser_cloud_in);
     PointCloudConstPtr laser_cloud_in_ptr(new PointCloud(laser_cloud_in));
 
+    // 设置输入点云，执行 cloud_ptr_ = laser_cloud_in_ptr
     SetInputCloud(laser_cloud_in_ptr, raw_points_msg->header.stamp);
   } else {
     pcl::PointCloud<PointIR> laser_cloud_in;
     pcl::fromROSMsg(*raw_points_msg, laser_cloud_in);
     pcl::PointCloud<PointIR>::Ptr laser_cloud_in_ptr(new pcl::PointCloud<PointIR>(laser_cloud_in));
 
+    // 设置输入点云，执行 cloud_ir_ptr_ = laser_cloud_in_ptr
     SetInputCloud(laser_cloud_in_ptr, raw_points_msg->header.stamp);
   }
   Process();
 }
 
+// 关联到ros，这里是做ros相关的初始化
 void PointProcessor::SetupRos(ros::NodeHandle &nh) {
 
   is_ros_setup_ = true;
@@ -182,6 +187,8 @@ void PointProcessor::SetInputCloud(const pcl::PointCloud<PointIR>::Ptr &cloud_in
   cloud_ir_ptr_ = cloud_in;
 }
 
+
+// 把点云按线分组   num_rings_就是激光线数
 void PointProcessor::PointToRing() {
   if (uneven_ == false) {
     PointToRing(cloud_ptr_, laser_scans, intensity_scans);
@@ -190,6 +197,7 @@ void PointProcessor::PointToRing() {
   }
 
   // construct sorted full resolution cloud
+  // 按线的顺序存的点云
   size_t cloud_size = 0;
   for (int i = 0; i < num_rings_; i++) {
     cloud_in_rings_ += (*intensity_scans[i]);
@@ -204,6 +212,7 @@ void PointProcessor::PointToRing() {
 
 }
 
+// 
 void PointProcessor::PointToRing(const PointCloudConstPtr &cloud_in,
                                  vector<PointCloudPtr> &ring_out,
                                  vector<PointCloudPtr> &intensity_out) {
@@ -381,6 +390,7 @@ void PointProcessor::PointToRing(const PointCloudConstPtr &cloud_in,
         start_ori_ = ring_out[0]->front().intensity;
       }
     }
+    // 当前帧激光的起始角度
     start_ori_buf1_.push(start_ori_);
 
     start_ori_inferred_msg.data = start_ori_;
@@ -539,6 +549,7 @@ void PointProcessor::SetDeskew(bool deskew) {
   config_.deskew = deskew;
 }
 
+// 
 void PointProcessor::PrepareRing(const PointCloud &scan) {
   // const PointCloud &scan = laser_scans[idx_ring];
   size_t scan_size = scan.size();
@@ -549,15 +560,19 @@ void PointProcessor::PrepareRing(const PointCloud &scan) {
     const PointT &p_curr = scan[i];
     const PointT &p_next = scan[i + 1];
 
+    // 计算欧氏距离平方
     float diff_next2 = CalcSquaredDiff(p_curr, p_next);
 
     // about 30 cm
     if (diff_next2 > 0.1) {
+      // 算欧氏距离
       float depth = CalcPointDistance(p_curr);
       float depth_next = CalcPointDistance(p_next);
 
       if (depth > depth_next) {
         // to closer point
+        // 加权重的距离平方
+        // 把cur和next的range放缩至相同
         float weighted_diff = sqrt(CalcSquaredDiff(p_next, p_curr, depth_next / depth)) / depth_next;
         // relative distance
         if (weighted_diff < 0.1) {
@@ -584,6 +599,7 @@ void PointProcessor::PrepareRing(const PointCloud &scan) {
   }
 }
 
+// 计算曲率并排序 存在curvature_idx_pairs_
 void PointProcessor::PrepareSubregion(const PointCloud &scan, const size_t idx_start, const size_t idx_end) {
 
 //  cout << ">>>>>>> " << idx_ring << ", " << idx_start << ", " << idx_end << " <<<<<<<" << endl;
@@ -621,6 +637,7 @@ void PointProcessor::PrepareSubregion(const PointCloud &scan, const size_t idx_s
 
 }
 
+// 
 void PointProcessor::MaskPickedInRing(const PointCloud &scan, const size_t in_scan_idx) {
 
   // const PointCloud &scan = laser_scans[idx_ring];
@@ -683,6 +700,9 @@ void PointProcessor::ExtractFeaturePoints() {
       PrepareSubregion(scan_ring, sp, ep);
 
       // extract corner features
+      // 提取corner
+      // 因为排序了，从后往前遍历
+      // subregion_labels_记录点属性
       int num_largest_picked = 0;
       for (size_t k = region_size; k > 0 && num_largest_picked < config_.max_corner_less_sharp;) {
         // k must be greater than 0
@@ -692,6 +712,7 @@ void PointProcessor::ExtractFeaturePoints() {
         size_t in_scan_idx = idx - 0; // scan start index is 0 for all ring scans
         size_t in_region_idx = idx - sp;
 
+        // 添加corner
         if (scan_ring_mask_[in_scan_idx] == 0 && curvature > config_.surf_curv_th) {
           ++num_largest_picked;
           if (num_largest_picked <= config_.max_corner_sharp) {
@@ -707,6 +728,7 @@ void PointProcessor::ExtractFeaturePoints() {
       }
 
       // extract flat surface features
+      // 提取surf
       int num_smallest_picked = 0;
       for (int k = 0; k < region_size && num_smallest_picked < config_.max_surf_flat; ++k) {
         const pair<float, size_t> &curvature_idx = curvature_idx_pairs_[k];
@@ -725,6 +747,7 @@ void PointProcessor::ExtractFeaturePoints() {
       }
 
       // extract less flat surface features
+      // 提取 less flat
       for (int k = 0; k < region_size; ++k) {
         if (subregion_labels_[k] <= SURFACE_LESS_FLAT) {
           surf_points_less_flat_ptr->push_back(scan_ring[sp + k]);
@@ -734,6 +757,7 @@ void PointProcessor::ExtractFeaturePoints() {
     } /// j
 
     // down size less flat surface point cloud of current scan
+    // 降采样 less flat
     PointCloud surf_points_less_flat_downsampled;
     pcl::VoxelGrid<PointT> down_size_filter;
     down_size_filter.setInputCloud(surf_points_less_flat_ptr);
@@ -794,6 +818,16 @@ void PointProcessor::PublishResults() {
   PublishCloudMsg(pub_corner_points_less_sharp_, corner_points_less_sharp_, sweep_start_, config_.capture_frame_id);
   PublishCloudMsg(pub_surf_points_flat_, surface_points_flat_, sweep_start_, config_.capture_frame_id);
   PublishCloudMsg(pub_surf_points_less_flat_, surface_points_less_flat_, sweep_start_, config_.capture_frame_id);
+  /*
+  pub_full_cloud_ = nh.advertise<sensor_msgs::PointCloud2>("/full_cloud", 2);
+  pub_corner_points_sharp_ = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_sharp", 2);
+  pub_corner_points_less_sharp_ = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_less_sharp", 2);
+  pub_surf_points_flat_ = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_flat", 2);
+  pub_surf_points_less_flat_ = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_less_flat", 2);
+
+  pub_start_ori_ = nh.advertise<std_msgs::Float32>("/debug/start_ori", 10);
+  pub_start_ori_inferred_ = nh.advertise<std_msgs::Float32>("/debug/start_ori_inferred", 10);
+  */
 }
 
 } // namespace lio

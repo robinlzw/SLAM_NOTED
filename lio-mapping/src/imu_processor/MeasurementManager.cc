@@ -37,20 +37,25 @@ void MeasurementManager::SetupRos(ros::NodeHandle &nh) {
 
   nh_ = nh;
 
+  // 订阅画梯 /imu/data
   sub_imu_ = nh_.subscribe<sensor_msgs::Imu>(mm_config_.imu_topic,
                                              1000,
                                              &MeasurementManager::ImuHandler,
                                              this,
                                              ros::TransportHints().tcpNoDelay());
 
+  // 订阅话题 /compact_data  来自PointOdometry
   sub_compact_data_ = nh_.subscribe<sensor_msgs::PointCloud2>(mm_config_.compact_data_topic,
                                                               10,
                                                               &MeasurementManager::CompactDataHandler,
                                                               this);
+
 //  sub_laser_odom_ =
 //      nh_.subscribe<nav_msgs::Odometry>(mm_config_.laser_odom_topic, 10, &MeasurementManager::LaserOdomHandler, this);
 }
 
+// 获取测量值  返回的measurements，是一个序列
+// 序列元素   上一帧到当前帧 额外多一帧 的imu数据  +  融合lidar信息（odom+点云）
 PairMeasurements MeasurementManager::GetMeasurements() {
 
   PairMeasurements measurements;
@@ -63,6 +68,7 @@ PairMeasurements MeasurementManager::GetMeasurements() {
         return measurements;
       }
 
+      // imu尾部早于lidar，直接返回
       if (imu_buf_.back()->header.stamp.toSec()
           <= compact_data_buf_.front()->header.stamp.toSec() + mm_config_.msg_time_delay) {
         //ROS_DEBUG("wait for imu, only should happen at the beginning");
@@ -70,6 +76,7 @@ PairMeasurements MeasurementManager::GetMeasurements() {
         return measurements;
       }
 
+      // imu首部晚于lidar，当前lidar没有可用imu数据，直接弹出
       if (imu_buf_.front()->header.stamp.toSec()
           >= compact_data_buf_.front()->header.stamp.toSec() + mm_config_.msg_time_delay) {
         ROS_DEBUG("throw compact_data, only should happen at the beginning");
@@ -79,6 +86,7 @@ PairMeasurements MeasurementManager::GetMeasurements() {
       CompactDataConstPtr compact_data_msg = compact_data_buf_.front();
       compact_data_buf_.pop();
 
+      //  存下来的是 lidar融合数据+上一帧到当前帧之间的imu数据
       vector<sensor_msgs::ImuConstPtr> imu_measurements;
       while (imu_buf_.front()->header.stamp.toSec()
           < compact_data_msg->header.stamp.toSec() + mm_config_.msg_time_delay) {
@@ -87,6 +95,7 @@ PairMeasurements MeasurementManager::GetMeasurements() {
       }
 
       // NOTE: one message after laser odom msg
+      // 再加一个 lidar时间之后的
       imu_measurements.emplace_back(imu_buf_.front());
 
       if (imu_measurements.empty()) {

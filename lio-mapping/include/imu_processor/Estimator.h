@@ -107,6 +107,7 @@ struct EstimatorConfig {
   IntegrationBaseConfig pim_config;
 };
 
+// 继承 MeasurementManager  PointMapping
 class Estimator : public MeasurementManager, public PointMapping {
  public:
   Estimator();
@@ -189,9 +190,10 @@ class Estimator : public MeasurementManager, public PointMapping {
   Vector3d acc_last_, gyr_last_;
   Vector3d g_vec_;
 
+  // 预积分  在 IntegrationBase.h 文件中
   shared_ptr<IntegrationBase> tmp_pre_integration_;
 
-  //  map<double, LaserFrame> all_laser_frames;
+  // map<double, LaserFrame> all_laser_frames;
 
   CircularBuffer<PairTimeLaserTransform> all_laser_transforms_{estimator_config_.window_size + 1};
 
@@ -223,10 +225,14 @@ class Estimator : public MeasurementManager, public PointMapping {
   CircularBuffer<PointCloudPtr> full_stack_{estimator_config_.window_size + 1};
 
   ///> optimization buffers
+  // 优化 队列
   CircularBuffer<bool> opt_point_coeff_mask_{estimator_config_.opt_window_size + 1};
+  // ScorePointCoeffMap -》 multimap<float, pair<PointT, PointT>, greater<float> >
   CircularBuffer<ScorePointCoeffMap> opt_point_coeff_map_{estimator_config_.opt_window_size + 1};
+  // CubeCenter  存了 cube的中心位置
   CircularBuffer<CubeCenter> opt_cube_centers_{estimator_config_.opt_window_size + 1};
   CircularBuffer<Transform> opt_transforms_{estimator_config_.opt_window_size + 1};
+  // 存当前匹配，valid cube的id
   CircularBuffer<vector<size_t> > opt_valid_idx_{estimator_config_.opt_window_size + 1};
   CircularBuffer<PointCloudPtr> opt_corner_stack_{estimator_config_.opt_window_size + 1};
   CircularBuffer<PointCloudPtr> opt_surf_stack_{estimator_config_.opt_window_size + 1};

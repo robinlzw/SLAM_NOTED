@@ -105,6 +105,9 @@ size_t TransformToEnd(PointCloudPtr &cloud, Twist<float> transform_es, float tim
 Estimator::Estimator() {
   ROS_DEBUG(">>>>>>> Estimator started! <<<<<<<");
 
+  // SIZE_QUAT 4
+  // SIZE_POSE 7
+  // SIZE_SPEED_BIAS 9
   para_pose_ = new double *[estimator_config_.opt_window_size + 1];
   para_speed_bias_ = new double *[estimator_config_.opt_window_size + 1];
   for (int i = 0; i < estimator_config_.opt_window_size + 1;
@@ -228,6 +231,7 @@ void Estimator::SetupAllEstimatorConfig(const EstimatorConfig &config, const Mea
   estimator_config_ = config;
 }
 
+// 清除状态  创建的时候会用来初始化状态
 void Estimator::ClearState() {
   // TODO: CirclarBuffer should have clear method
 
@@ -264,6 +268,7 @@ void Estimator::ClearState() {
     opt_surf_stack_[i].reset();
   }
 
+  // stage_flag_很重要，初始是NOT_INITED
   stage_flag_ = NOT_INITED;
   first_imu_ = false;
   cir_buf_count_ = 0;
@@ -287,6 +292,7 @@ void Estimator::ClearState() {
   convergence_flag_ = false;
 }
 
+// 配置ros相关
 void Estimator::SetupRos(ros::NodeHandle &nh) {
   MeasurementManager::SetupRos(nh);
   PointMapping::SetupRos(nh, false);
@@ -335,10 +341,12 @@ void Estimator::SetupRos(ros::NodeHandle &nh) {
   pub_extrinsic_ = nh.advertise<geometry_msgs::PoseStamped>("/extrinsic_lb", 10);
 }
 
+// 处理imu数据    做中值积分
 void Estimator::ProcessImu(double dt,
                            const Vector3d &linear_acceleration,
                            const Vector3d &angular_velocity,
                            const std_msgs::Header &header) {
+  // 第一帧处理的数据
   if (!first_imu_) {
     first_imu_ = true;
     acc_last_ = linear_acceleration;
@@ -347,6 +355,7 @@ void Estimator::ProcessImu(double dt,
     linear_acceleration_buf_.push(vector<Vector3d>());
     angular_velocity_buf_.push(vector<Vector3d>());
 
+    // 都是循环队列CurcularBuffer格式的，大小是window_size+1
     Eigen::Matrix3d I3x3;
     I3x3.setIdentity();
     Ps_.push(Vector3d{0, 0, 0});
@@ -376,6 +385,7 @@ void Estimator::ProcessImu(double dt,
 //  }
 
   // NOTE: Do not update tmp_pre_integration_ until first laser comes
+  // 来了第一帧数据后，开始计算并更新
   if (cir_buf_count_ != 0) {
 
     tmp_pre_integration_->push_back(dt, linear_acceleration, angular_velocity);
@@ -384,13 +394,23 @@ void Estimator::ProcessImu(double dt,
     linear_acceleration_buf_[cir_buf_count_].push_back(linear_acceleration);
     angular_velocity_buf_[cir_buf_count_].push_back(angular_velocity);
 
+    // 中值积分
+    // 计算顺序 a0 w Q a1 a P V
+    // acc_last_  gyr_last_  是上一帧的 线速度  角速度
     size_t j = cir_buf_count_;
+    // a0 = q(k)(ak - bk) + g
     Vector3d un_acc_0 = Rs_[j] * (acc_last_ - Bas_[j]) + g_vec_;
+    // uw = 0.5 * [(wk - bak) + (wk+1 - bak)]
     Vector3d un_gyr = 0.5 * (gyr_last_ + angular_velocity) - Bgs_[j];
+    // qk+1 = qk * (uw * dt).toQ
     Rs_[j] *= DeltaQ(un_gyr * dt).toRotationMatrix();
+    // ua1 = qk+1 * (ak+1 - bak) + g
     Vector3d un_acc_1 = Rs_[j] * (linear_acceleration - Bas_[j]) + g_vec_;
+    // ua = 0.5 * (ua0 + ua1)
     Vector3d un_acc = 0.5 * (un_acc_0 + un_acc_1);
+    // Pk+1 = Pk + Vk * dt + 0.5 * ua * dt^2
     Ps_[j] += dt * Vs_[j] + 0.5 * dt * dt * un_acc;
+    // Vk+1 = Vk + ua * dt
     Vs_[j] += dt * un_acc;
 
     StampedTransform imu_tt;
@@ -427,12 +447,15 @@ void Estimator::ProcessImu(double dt,
 }
 
 // TODO: this function can be simplified
+// 
+// 这里有一步，判断是否初始化成功  然后stage_flag_ = INITED;
 void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::Header &header) {
 
   ROS_DEBUG(">>>>>>> new laser odom coming <<<<<<<");
 
   ++laser_odom_recv_count_;
 
+  // 初始化帧数，indoor是2
   if (stage_flag_ != INITED
       && laser_odom_recv_count_ % estimator_config_.init_window_factor != 0) { /// better for initialization
     return;
@@ -442,6 +465,17 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
 
   // TODO: LaserFrame Object
   // LaserFrame laser_frame(laser, header.stamp.toSec());
+
+
+  /*
+  LaserTransform的成员：
+  double time;
+  Transform transform;
+  shared_ptr<IntegrationBase> pre_integration;
+
+  还有一个基于此的类型定义
+  typedef pair<double, LaserTransform> PairTimeLaserTransform;
+  */
 
   LaserTransform laser_transform(header.stamp.toSec(), transform_in);
 
@@ -455,7 +489,7 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
                                                                            Bas_[cir_buf_count_],
                                                                            Bgs_[cir_buf_count_],
                                                                            estimator_config_.pim_config));
-
+  // CircularBuffer<PairTimeLaserTransform> 大小为window_size+1
   all_laser_transforms_.push(make_pair(header.stamp.toSec(), laser_transform));
 
 
@@ -465,12 +499,14 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
   // NOTE: push PointMapping's point_coeff_map_
   ///> optimization buffers
   opt_point_coeff_mask_.push(false); // default new frame
+  // score_point_coeff_ 是 当前帧匹配得到的 点坐标 和 系数矩阵
   opt_point_coeff_map_.push(score_point_coeff_);
   opt_cube_centers_.push(CubeCenter{laser_cloud_cen_length_, laser_cloud_cen_width_, laser_cloud_cen_height_});
   opt_transforms_.push(laser_transform.transform);
   opt_valid_idx_.push(laser_cloud_valid_idx_);
 
   // TODO: avoid memory allocation?
+  // 还未初始化
   if (stage_flag_ != INITED || (!estimator_config_.enable_deskew && !estimator_config_.cutoff_deskew)) {
     surf_stack_.push(boost::make_shared<PointCloud>(*laser_cloud_surf_stack_downsampled_));
     size_surf_stack_.push(laser_cloud_surf_stack_downsampled_->size());
@@ -540,6 +576,7 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
           DLOG(INFO) << "initialization time: " << tic_toc_.Toc() << " ms";
 
           if (init_result) {
+            // 初始化以后，stage_flag_置INITED
             stage_flag_ = INITED;
             SetInitFlag(true);
 
@@ -773,11 +810,14 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
 
 }
 
+// 处理融合数据     还有疑问？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？
 void Estimator::ProcessCompactData(const sensor_msgs::PointCloud2ConstPtr &compact_data,
                                    const std_msgs::Header &header) {
   /// 1. process compact data
+  // 处理融合数据，得到拆分开的数据
   PointMapping::CompactDataHandler(compact_data);
 
+  // 初始状态是 NOT_INITED
   if (stage_flag_ == INITED) {
     Transform trans_prev(Eigen::Quaterniond(Rs_[estimator_config_.window_size - 1]).cast<float>(),
                          Ps_[estimator_config_.window_size - 1].cast<float>());
@@ -786,9 +826,11 @@ void Estimator::ProcessCompactData(const sensor_msgs::PointCloud2ConstPtr &compa
 
     Transform d_trans = trans_prev.inverse() * trans_curr;
 
+    // transform_bef_mapped_现在存得是前一帧的，运算后得到前一帧到当前帧的增量
+    // 用的是odom的数据，不是mapping
     Transform transform_incre(transform_bef_mapped_.inverse() * transform_sum_.transform());
 
-//    DLOG(INFO) << "base incre in laser world: " << d_trans;
+//    DLOG(INFO) << "basebase incre in laser world: " << d_trans;
 //    DLOG(INFO) << "incre in laser world: " << transform_incre;
 //    DLOG(INFO) << "before opt: " << transform_tobe_mapped_ * transform_lb_ * d_trans * transform_lb_.inverse();
 //
@@ -796,6 +838,7 @@ void Estimator::ProcessCompactData(const sensor_msgs::PointCloud2ConstPtr &compa
 //
 //    DLOG(INFO) << "tobe: " << transform_tobe_mapped_ * transform_incre;
 
+    // 这里有疑问？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？
     if (estimator_config_.imu_factor) {
       //    // WARNING: or using direct date?
       transform_tobe_mapped_bef_ = transform_tobe_mapped_ * transform_lb_ * d_trans * transform_lb_.inverse();
@@ -807,8 +850,11 @@ void Estimator::ProcessCompactData(const sensor_msgs::PointCloud2ConstPtr &compa
 
   }
 
+  // 还没初始化，或者不用imufactor的话
+  // 也就是刚开始是用loam的mapping来初始化的
   if (stage_flag_ != INITED || !estimator_config_.imu_factor) {
     /// 2. process decoded data
+    // 做mapping
     PointMapping::Process();
   } else {
 //    for (int i = 0; i < laser_cloud_surf_last_->size(); ++i) {
@@ -845,6 +891,7 @@ void Estimator::ProcessCompactData(const sensor_msgs::PointCloud2ConstPtr &compa
             << laser_cloud_corner_stack_downsampled_->size();
 
   Transform transform_to_init_ = transform_aft_mapped_;
+  // 暂时没看？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？
   ProcessLaserOdom(transform_to_init_, header);
 
 // NOTE: will be updated in PointMapping's OptimizeTransformTobeMapped
@@ -2685,6 +2732,7 @@ void Estimator::ProcessEstimation() {
       double ax = 0, ay = 0, az = 0, rx = 0, ry = 0, rz = 0;
       TicToc tic_toc_imu;
       tic_toc_imu.Tic();
+      // 做中值积分   这里有一个cir_buf_count_变量，在ProcessImu中会用到，每处理一帧激光，会加1
       for (auto &imu_msg : measurement.first) {
         double imu_time = imu_msg->header.stamp.toSec();
         double laser_odom_time = compact_data_msg->header.stamp.toSec() + mm_config_.msg_time_delay;
@@ -2708,12 +2756,17 @@ void Estimator::ProcessEstimation() {
         } else {
 
           // NOTE: interpolate imu measurement
+          // 这里就是处理 额外的那一帧imu
+          // 为了让imu积分出来的，与lidar严格对齐
+          // 这里通过插值得到
+          // 此处 curr_time_ 存的是上一帧时间
           double dt_1 = laser_odom_time - curr_time_;
           double dt_2 = imu_time - laser_odom_time;
           curr_time_ = laser_odom_time;
           ROS_ASSERT(dt_1 >= 0);
           ROS_ASSERT(dt_2 >= 0);
           ROS_ASSERT(dt_1 + dt_2 > 0);
+          // 按照时间比例，线性插值
           double w1 = dt_2 / (dt_1 + dt_2);
           double w2 = dt_1 / (dt_1 + dt_2);
           ax = w1 * ax + w2 * imu_msg->linear_acceleration.x;

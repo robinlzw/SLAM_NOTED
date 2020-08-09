@@ -101,6 +101,7 @@ PointOdometry::PointOdometry(float scan_period, int io_ratio, size_t num_max_ite
 //  laser_odometry_trans_.child_frame_id_ = "/laser_odom";
 }
 
+// 配置ros，紧接着下边是 回调函数
 void PointOdometry::SetupRos(ros::NodeHandle &nh) {
 
   is_ros_setup_ = true;
@@ -291,6 +292,8 @@ size_t PointOdometry::TransformToEnd(PointCloudPtr &cloud) {
   return cloud_size;
 }
 
+
+// loam 的odometry
 void PointOdometry::Process() {
   if (!HasNewData()) {
     // DLOG(INFO) << "no data received or dropped";
@@ -722,13 +725,15 @@ void PointOdometry::PublishResults() {
 
 
   // publish cloud results according to the input output ratio
-  if (io_ratio_ < 2 || frame_count_ % io_ratio_ == 1) {
+  // 
+  if (io_ratio_io_ratio_ < 2 || frame_count_ % io_ratio_ == 1) {
 
     ros::Time sweepTime = time_corner_points_sharp_;
     if (enable_odom_) {
       TransformToEnd(full_cloud_);  // transform full resolution cloud to sweep end before sending it
     }
 
+    // 把位姿和点云打包一下发出去
     if (compact_data_) {
       TicToc tic_toc_encoder;
 
@@ -761,10 +766,26 @@ void PointOdometry::PublishResults() {
         compact_data += (*full_cloud_);
       }
 
+      // 发布 compact_data  是一个pointcloud
+      // pub_compact_data_ = nh.advertise<sensor_msgs::PointCloud2>("/compact_data", 2);
+      // 该数据含有：
+      // 1：位置 xyz  2：旋转 xyzi  3：corner surf full 的size对应xyz  4 三个点云追加到后边
       PublishCloudMsg(pub_compact_data_, compact_data, sweepTime, "/camera");
 
       ROS_DEBUG_STREAM("encode compact data and publish time: " << tic_toc_encoder.Toc() << " ms");
     } else {
+      // 分别发
+      // advertise laser odometry topics
+
+      /*
+      发布点云信息
+      pub_laser_cloud_corner_last_ = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_corner_last", 2);
+      pub_laser_cloud_surf_last_ = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_surf_last", 2);
+      pub_full_cloud_ = nh.advertise<sensor_msgs::PointCloud2>("/full_odom_cloud", 2);
+      里程计发布在上边
+      pub_laser_odometry_ = nh.advertise<nav_msgs::Odometry>("/laser_odom_to_init", 5);
+      pub_diff_odometry_ = nh.advertise<nav_msgs::Odometry>("/laser_odom_to_last", 5);
+      */
       PublishCloudMsg(pub_laser_cloud_corner_last_, *last_corner_cloud_, sweepTime, "/camera");
       PublishCloudMsg(pub_laser_cloud_surf_last_, *last_surf_cloud_, sweepTime, "/camera");
       PublishCloudMsg(pub_full_cloud_, *full_cloud_, sweepTime, "/camera");
