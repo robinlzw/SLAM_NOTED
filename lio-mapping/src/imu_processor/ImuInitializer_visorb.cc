@@ -32,6 +32,7 @@
 
 namespace lio {
 
+// 
 void EstimateGyroBias(CircularBuffer<PairTimeLaserTransform> &all_laser_transforms,
                       CircularBuffer<Vector3d> &Bgs) {
   Matrix3d A;
@@ -59,7 +60,7 @@ void EstimateGyroBias(CircularBuffer<PairTimeLaserTransform> &all_laser_transfor
     tmp_b = 2 * (laser_trans_j.second.pre_integration->delta_q_.conjugate() * q_ij).vec(); /// 2*vec(IMU_ij^T * q_ij)
     A += tmp_A.transpose() * tmp_A;
     b += tmp_A.transpose() * tmp_b;
-
+  
   }
   delta_bg = A.ldlt().solve(b);
   DLOG(WARNING) << "gyroscope bias initial calibration: " << delta_bg.transpose();

@@ -137,11 +137,20 @@ inline Eigen::Matrix<typename Derived::Scalar, 3, 3> SkewSymmetric(const Eigen::
   return m;
 }
 
+// 
 template<typename Derived>
 inline Eigen::Matrix<typename Derived::Scalar, 4, 4> LeftQuatMatrix(const Eigen::QuaternionBase<Derived> &q) {
   Eigen::Matrix<typename Derived::Scalar, 4, 4> m;
+  // vq 是 q的虚部
   Eigen::Matrix<typename Derived::Scalar, 3, 1> vq = q.vec();
+  // q4 是 q的实部
   typename Derived::Scalar q4 = q.w();
+  // m = 
+  //  q0  -q3   q2  0
+  //  q3   q0  -q1  0
+  // -q2   q1   q0  0
+  // -q1  -q2  -q3  q0
+  //
   m.block(0, 0, 3, 3) << q4 * I3x3 + SkewSymmetric(vq);
   m.block(3, 0, 1, 3) << -vq.transpose();
   m.block(0, 3, 3, 1) << vq;
@@ -149,11 +158,18 @@ inline Eigen::Matrix<typename Derived::Scalar, 4, 4> LeftQuatMatrix(const Eigen:
   return m;
 }
 
+// 
 template<typename Derived>
 inline Eigen::Matrix<typename Derived::Scalar, 4, 4> RightQuatMatrix(const Eigen::QuaternionBase<Derived> &p) {
   Eigen::Matrix<typename Derived::Scalar, 4, 4> m;
   Eigen::Matrix<typename Derived::Scalar, 3, 1> vp = p.vec();
   typename Derived::Scalar p4 = p.w();
+  // m = 
+  //  q0   q3  -q2  0
+  // -q3   q0   q1  0
+  //  q2  -q1   q0  0
+  // -q1  -q2  -q3  q0
+  //
   m.block(0, 0, 3, 3) << p4 * I3x3 - SkewSymmetric(vp);
   m.block(3, 0, 1, 3) << -vp.transpose();
   m.block(0, 3, 3, 1) << vp;
@@ -176,6 +192,7 @@ inline Eigen::Matrix<T, 4, 4> LeftQuatMatrix(const Eigen::Matrix<T, 4, 1> &q) {
 template<typename T>
 inline Eigen::Matrix<T, 4, 4> RightQuatMatrix(const Eigen::Matrix<T, 4, 1> &p) {
   Eigen::Matrix<T, 4, 4> m;
+  // 
   Eigen::Matrix<T, 3, 1> vp{p.x(), p.y(), p.z()};
   T p4 = p.w();
   m.block(0, 0, 3, 3) << p4 * I3x3 - SkewSymmetric(vp);

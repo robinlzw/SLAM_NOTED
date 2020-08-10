@@ -350,12 +350,13 @@ void RefineGravityAccBias(CircularBuffer<PairTimeLaserTransform> &all_laser_tran
 //
 //}
 
+// 估计imu和lidar之间的选抓还能，坐标系对齐
 bool ImuInitializer::EstimateExtrinsicRotation(CircularBuffer<PairTimeLaserTransform> &all_laser_transforms,
                                                Transform &transform_lb) {
 
   Transform transform_bl = transform_lb.inverse();
   Eigen::Quaterniond rot_bl = transform_bl.rot.template cast<double>();
-
+  // 当window满了的时候，才进入这一步的
   size_t window_size = all_laser_transforms.size() - 1;
 
   Eigen::MatrixXd A(window_size * 4, 4);
@@ -371,12 +372,16 @@ bool ImuInitializer::EstimateExtrinsicRotation(CircularBuffer<PairTimeLaserTrans
     Eigen::Quaterniond delta_qij_laser
         = (laser_trans_i.second.transform.rot.conjugate() * laser_trans_j.second.transform.rot).template cast<double>();
 
+    // imu增量乘rot_bl得到，imu估计出来的lidar增量
     Eigen::Quaterniond delta_qij_laser_from_imu = rot_bl.conjugate() * delta_qij_imu * rot_bl;
 
+    // 两个旋转之间的角度，以弧度表示
+    // 转成了角度，这里就是残差了
     double angular_distance = 180 / M_PI * delta_qij_laser.angularDistance(delta_qij_laser_from_imu);
 
 //    DLOG(INFO) << i << ", " << angular_distance;
 
+    // 类似于 huber 核函数，限制
     double huber = angular_distance > 5.0 ? 5.0 / angular_distance : 1.0;
 
     Eigen::Matrix4d lq_mat = LeftQuatMatrix(delta_qij_laser);
@@ -396,7 +401,10 @@ bool ImuInitializer::EstimateExtrinsicRotation(CircularBuffer<PairTimeLaserTrans
   }
 
 //  DLOG(INFO) << ">>>>>>> A <<<<<<<" << endl << A;
-
+  // SVD分解  J=UEV^T
+  // U = svd.matrixU()
+  // V = svd.matrixV()
+  // A = svd.singularValues();  sigma的对角线元素
   Eigen::JacobiSVD<MatrixXd> svd(A, Eigen::ComputeFullU | Eigen::ComputeFullV);
   Eigen::Matrix<double, 4, 1> x = svd.matrixV().col(3);
   Quaterniond estimated_qlb(x);
@@ -429,7 +437,7 @@ bool ImuInitializer::Initialization(CircularBuffer<PairTimeLaserTransform> &all_
                                     Matrix3d &R_WI) {
 //  TicToc tic_toc;
 //  tic_toc.Tic();
-
+  // 估计陀螺仪（角速度）bias
   EstimateGyroBias(all_laser_transforms, Bgs);
 
 //  DLOG(INFO) << "EstimateGyroBias time: " << tic_toc.Toc() << " ms";

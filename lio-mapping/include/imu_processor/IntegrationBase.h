@@ -61,10 +61,15 @@ enum StateOrder {
   O_BG = 12,
 };
 
+// 高斯白噪声
 struct IntegrationBaseConfig {
+  // 加速度
   double acc_n = 0.1;
+  // 角速度
   double gyr_n = 0.01;
+  // 加速度随机游走bias
   double acc_w = 0.0002;
+  // 角速度随机游走bias
   double gyr_w = 2.0e-5;
   double g_norm = 9.805;
 };
@@ -91,8 +96,9 @@ class IntegrationBase {
         delta_v_{Vector3d::Zero()} {
     config_ = config;
     g_vec_ = Vector3d(0, 0, -config_.g_norm);
-    // 初始化噪声矩阵
+    // 初始化高斯白噪声矩阵
     // 一共6项，每项都是 3×3 矩阵
+    // 
     noise_ = Matrix<double, 18, 18>::Zero();
     noise_.block<3, 3>(0, 0) = (config_.acc_n * config_.acc_n) * Matrix3d::Identity();
     noise_.block<3, 3>(3, 3) = (config_.gyr_n * config_.gyr_n) * Matrix3d::Identity();

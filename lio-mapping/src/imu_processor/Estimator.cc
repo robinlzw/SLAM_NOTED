@@ -470,7 +470,7 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
   /*
   LaserTransform的成员：
   double time;
-  Transform transform;
+  Transform transform;  // 存得lidar mapping出来的全局位姿
   shared_ptr<IntegrationBase> pre_integration; 
 
   ****************  注意pre_integration这一项，存了一帧激光对应的预计分信息
@@ -528,6 +528,7 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
 
   if (estimator_config_.run_optimization) {
     switch (stage_flag_) {
+      /*************************************************************************/
       // 检测是否初始化
       case NOT_INITED: {
 
@@ -565,9 +566,10 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
 
           // 所以这里才是使用imu数据，初始化代码
           } else {
-            // extrinsic_stage_初始值为2
+            // extrinsic_stage_初始值为2  指的是不知道任何外参信息，需要标定
             // 所以是两部初始化
             // 第一步：进行lidar和imu的外参标定
+            // 这一步只进行一次
             if (extrinsic_stage_ == 2) {
               // TODO: move before initialization
               // imu初始化，得到外部标定
@@ -582,7 +584,7 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
               }
             }
 
-            // 
+            // 第二步，imu参数初始化，似乎每次都需要初始化这个值
             if (extrinsic_stage_ != 2 && (header.stamp.toSec() - initial_time_) > 0.1) {
               DLOG(INFO) << "EXTRINSIC STAGE: " << extrinsic_stage_;
               init_result = RunInitialization();
@@ -602,6 +604,7 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
 
             ROS_WARN_STREAM(">>>>>>> IMU initialized <<<<<<<");
 
+            // enable_deskew都是1，cutoff_deskew对64线是1
             if (estimator_config_.enable_deskew || estimator_config_.cutoff_deskew) {
               ros::ServiceClient client = nh_.serviceClient<std_srvs::SetBool>("/enable_odom");
               std_srvs::SetBool srv;
@@ -613,11 +616,15 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
               }
             }
 
+            // 输出
             for (size_t i = 0; i < estimator_config_.window_size + 1;
                  ++i) {
               Twist<double> transform_lb = transform_lb_.cast<double>();
 
+              // 存疑？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？
+              // imu通过标定数据得到的帧间lidar旋转
               Quaterniond Rs_li(Rs_[i] * transform_lb.rot.inverse());
+              // imu通过标定数据得到的帧间lidar位移
               Eigen::Vector3d Ps_li = Ps_[i] - Rs_li * transform_lb.pos;
 
               Twist<double> trans_li{Rs_li, Ps_li};
@@ -654,6 +661,8 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
           } else {
             SlideWindow();
           }
+
+        // window没有满，就不进行初始化或者优化 
         } else {
           DLOG(INFO) << "Ps size: " << Ps_.size();
           DLOG(INFO) << "pre size: " << pre_integrations_.size();
@@ -672,7 +681,7 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
         break;
       }
 
-
+      /**************************************************************************************/
       // 已初始化后的处理
       case INITED: {
 
@@ -922,10 +931,13 @@ void Estimator::ProcessCompactData(const sensor_msgs::PointCloud2ConstPtr &compa
 
 }
 
-// 
+// 做imu系统的初始化，计算window里加速度的方差，判断激励是否足够
+// 估计 gravity  bias  v
 bool Estimator::RunInitialization() {
 
   // NOTE: check IMU observibility, adapted from VINS-mono
+  // 检测imu是否有足够的激励，用来初始化
+  // 计算加速度平均值
   {
     PairTimeLaserTransform laser_trans_i, laser_trans_j;
     Vector3d sum_g;
@@ -967,6 +979,8 @@ bool Estimator::RunInitialization() {
     }
   }
 
+  // 初始化  ？？？？？？？？？？？？？？？？？？？？？？？？？？ 先搁置了
+  // R_WI_ 是 inertial frame 到 world frame的旋转R
   Eigen::Vector3d g_vec_in_laser;
   bool init_result
       = ImuInitializer::Initialization(all_laser_transforms_, Vs_, Bas_, Bgs_, g_vec_in_laser, transform_lb_, R_WI_);
@@ -979,9 +993,14 @@ bool Estimator::RunInitialization() {
   // TODO: update states Ps_
   for (size_t i = 0; i < estimator_config_.window_size + 1;
        ++i) {
-    // trans_li 是lidar的位姿
+    // trans_li lidar在自己坐标系下的位姿
     const Transform &trans_li = all_laser_transforms_[i].second.transform;
     // trans_bi 是body的位姿（即imu的位姿）
+    // ？？？？？？？？？？？？？？？？？？？？？？？？？？？？？有问题
+    // 这里感觉trans变量名表示的意思不太统一
+    // 我认为 transform_lb_ 是 lidar到base这两个位置的变换
+    // trans_bi 是imu到base位置的变换
+    // 得到了
     Transform trans_bi = trans_li * transform_lb_;
     Ps_[i] = trans_bi.pos.template cast<double>();
     Rs_[i] = trans_bi.rot.normalized().toRotationMatrix().template cast<double>();
@@ -994,6 +1013,9 @@ bool Estimator::RunInitialization() {
 #endif
     //endregion
   }
+
+  // 初始化了gyr bias gravity velocity
+  // 把之前算的预积分再调整一遍
 
   Matrix3d R0 = R_WI_.transpose();
 
@@ -1033,6 +1055,8 @@ bool Estimator::RunInitialization() {
     return true;
   }
 }
+
+
 
 #ifdef USE_CORNER
 void Estimator::CalculateFeatures(const pcl::KdTreeFLANN<PointT>::Ptr &kdtree_surf_from_map,
@@ -1722,6 +1746,8 @@ void Estimator::BuildLocalMap(vector<FeaturePerFrame> &feature_frames) {
 
 }
 
+
+// 解决优化问题
 void Estimator::SolveOptimization() {
   if (cir_buf_count_ < estimator_config_.window_size && estimator_config_.imu_factor) {
     LOG(ERROR) << "enter optimization before enough count: " << cir_buf_count_ << " < "
@@ -1734,18 +1760,23 @@ void Estimator::SolveOptimization() {
   bool turn_off = true;
 //  Vector3d P_last0, P_last; /// for convergence check
 
+  // 创建优化问题
   ceres::Problem problem;
+  // 鲁棒和函数
   ceres::LossFunction *loss_function;
   // NOTE: indoor test
 //  loss_function = new ceres::HuberLoss(0.5);
+  // 柯西鲁棒和函数
   loss_function = new ceres::CauchyLoss(1.0);
 
   // NOTE: update from laser transform
+  // update_laser_imu项是1
   if (estimator_config_.update_laser_imu) {
     DLOG(INFO) << "======= bef opt =======";
 
     if (!estimator_config_.imu_factor) {
       Twist<double>
+          // 求 body 的增量
           incre = (transform_lb_.inverse() * all_laser_transforms_[cir_buf_count_ - 1].second.transform.inverse()
           * all_laser_transforms_[cir_buf_count_].second.transform * transform_lb_).cast<double>();
       Ps_[cir_buf_count_] = Rs_[cir_buf_count_ - 1] * incre.pos + Ps_[cir_buf_count_ - 1];

@@ -86,6 +86,7 @@ void Run() {
     tmp_int = fs_settings["opt_extrinsic"];
     estimator_config.opt_extrinsic = (tmp_int > 0);
 
+    // 外部标定信息，这个值赋给 transform_lb_
     cv::Mat cv_R, cv_T;
     fs_settings["extrinsic_rotation"] >> cv_R;
     fs_settings["extrinsic_translation"] >> cv_T;
