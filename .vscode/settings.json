@@ -6,6 +6,7 @@
         "random": "cpp",
         "list": "cpp",
         "utility": "cpp",
-        "map": "cpp"
+        "map": "cpp",
+        "memory": "cpp"
     }
 }

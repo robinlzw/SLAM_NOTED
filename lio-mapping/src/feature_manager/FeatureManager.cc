@@ -34,6 +34,7 @@ namespace lio {
 
 void PointNormalFeature::UpdateCovariance(const Eigen::Vector3d &normal3d_in) {
   ;
+  // 返回 向量e1方向 到 向量normal3d_in方向 的旋转
   Eigen::Matrix3d R = Eigen::Quaterniond::FromTwoVectors(e1, normal3d_in).toRotationMatrix();
   covariance = R * diag_covariance * R.transpose();
 }

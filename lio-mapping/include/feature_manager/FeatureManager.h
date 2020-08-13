@@ -55,6 +55,7 @@ struct PointNormalFeature : public Feature {
     feature_name = "PointNormalFeature";
     point3d = point3d_in;
     normal3d = normal3d_in;
+    // asDiagonal() 返回对角阵
     diag_covariance = Eigen::Vector3d{gicp_epsilon, 1.0, 1.0}.asDiagonal();
     UpdateCovariance(normal3d);
   }

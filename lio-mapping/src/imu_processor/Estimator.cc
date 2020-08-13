@@ -342,6 +342,7 @@ void Estimator::SetupRos(ros::NodeHandle &nh) {
 }
 
 // 处理imu数据    做中值积分
+// 这里的积分是没考虑 误差传递 的积分
 void Estimator::ProcessImu(double dt,
                            const Vector3d &linear_acceleration,
                            const Vector3d &angular_velocity,
@@ -449,13 +450,14 @@ void Estimator::ProcessImu(double dt,
 // TODO: this function can be simplified
 // 
 // 这里有一步，判断是否初始化成功  然后stage_flag_ = INITED;
+// 输入的是 transform_in 对应 transform_aft_mapped_
 void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::Header &header) {
 
   ROS_DEBUG(">>>>>>> new laser odom coming <<<<<<<");
 
   ++laser_odom_recv_count_;
 
-  // 初始化帧数，indoor是2
+  // init_window_factor 参数：初始化帧数，indoor是2，outdoor是1
   if (stage_flag_ != INITED
       && laser_odom_recv_count_ % estimator_config_.init_window_factor != 0) { /// better for initialization
     return;
@@ -470,7 +472,7 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
   /*
   LaserTransform的成员：
   double time;
-  Transform transform;  // 存得lidar mapping出来的全局位姿
+  Transform transform;  // 这里 存的lidar mapping出来的全局位姿
   shared_ptr<IntegrationBase> pre_integration; 
 
   ****************  注意pre_integration这一项，存了一帧激光对应的预计分信息
@@ -479,7 +481,7 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
   typedef pair<double, LaserTransform> PairTimeLaserTransform;
   */
 
-  // 存了 时间戳 + 当前位姿
+  // 存了 时间戳 + 当前位姿（应该是lidar坐标系下的）
   LaserTransform laser_transform(header.stamp.toSec(), transform_in);
 
   laser_transform.pre_integration = tmp_pre_integration_;
@@ -741,6 +743,9 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
               DLOG(INFO) << "cutoff_deskew";
             }
 
+            // 降采样surf和corner点
+            // 分别加入 surf_stack_ corner_stack_
+            // 其点数存在 size_surf_stack_ size_corner_stack_
             laser_cloud_surf_stack_downsampled_->clear();
             down_size_filter_surf_.setInputCloud(laser_cloud_surf_last_);
             down_size_filter_surf_.filter(*laser_cloud_surf_stack_downsampled_);
@@ -844,18 +849,31 @@ void Estimator::ProcessCompactData(const sensor_msgs::PointCloud2ConstPtr &compa
                                    const std_msgs::Header &header) {
   /// 1. process compact data
   // 处理融合数据，得到拆分开的数据
+  // 数据所对应的变量名
+  // INT corner_size
+  // int surf_size
+  // int full_size
+  // transform_sum_存odometry出来的全局位姿
+  // laser_cloud_corner_last_
+  // laser_cloud_surf_last_
+  // full_cloud_
   PointMapping::CompactDataHandler(compact_data);
 
   // 初始状态是 NOT_INITED
+  // 如果已经初始化完成了
+  // 
   if (stage_flag_ == INITED) {
+    // 上一帧的body位姿（imu数据）
     Transform trans_prev(Eigen::Quaterniond(Rs_[estimator_config_.window_size - 1]).cast<float>(),
                          Ps_[estimator_config_.window_size - 1].cast<float>());
+    // 当前帧的body位姿（imu数据）
     Transform trans_curr(Eigen::Quaterniond(Rs_.last()).cast<float>(),
                          Ps_.last().cast<float>());
 
+    // 帧间相对变换（imu数据）也就是body
     Transform d_trans = trans_prev.inverse() * trans_curr;
 
-    // transform_bef_mapped_现在存得是前一帧的，运算后得到前一帧到当前帧的增量
+    // transform_bef_mapped_ 现在存的是前一帧的，运算后得到前一帧到当前帧的增量（lidar里程计）
     // 用的是odom的数据，不是mapping
     Transform transform_incre(transform_bef_mapped_.inverse() * transform_sum_.transform());
 
@@ -870,6 +888,10 @@ void Estimator::ProcessCompactData(const sensor_msgs::PointCloud2ConstPtr &compa
     // 这里有疑问？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？
     if (estimator_config_.imu_factor) {
       //    // WARNING: or using direct date?
+      // 这个值有疑问
+      // d_trans * transform_lb_.inverse() 是imu数据换出来的 lidar帧间变换
+      // transform_tobe_mapped_ * transform_lb_ 算出来的是
+      // 暂且认为 transform_tobe_mapped_bef_ 是上一帧的map前位姿，transform_tobe_mapped_是当前map初值
       transform_tobe_mapped_bef_ = transform_tobe_mapped_ * transform_lb_ * d_trans * transform_lb_.inverse();
       transform_tobe_mapped_ = transform_tobe_mapped_bef_;
     } else {
@@ -880,12 +902,18 @@ void Estimator::ProcessCompactData(const sensor_msgs::PointCloud2ConstPtr &compa
   }
 
   // 还没初始化，或者不用imufactor的话
-  // 也就是刚开始是用loam的mapping来初始化的
+  // 也就是刚开始是用loam的mapping跑
+  // 直到有足够的激励，对imu进行参数进行初始化，这里就不再执行了
   if (stage_flag_ != INITED || !estimator_config_.imu_factor) {
     /// 2. process decoded data
     // 做mapping
     PointMapping::Process();
   } else {
+    // 如果已经初始化了，并且用imu_factor
+    // 就不进行其他处理了
+    // 在 ProcessLaserOdom 中，会有区分性的处理
+
+
 //    for (int i = 0; i < laser_cloud_surf_last_->size(); ++i) {
 //      PointT &p = laser_cloud_surf_last_->at(i);
 //      p.intensity = p.intensity - int(p.intensity);
@@ -919,6 +947,8 @@ void Estimator::ProcessCompactData(const sensor_msgs::PointCloud2ConstPtr &compa
   DLOG(INFO) << "laser_cloud_corner_stack_downsampled_[" << header.stamp.toSec() << "]: "
             << laser_cloud_corner_stack_downsampled_->size();
 
+  // 这是loam的mapping出来的最终位姿transform_tobe_mapped_
+  // 初始化后，后续还会更新吗？？？？？？？？？？？？？？？？？？？？？？？
   Transform transform_to_init_ = transform_aft_mapped_;
   // 暂时没看？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？
   ProcessLaserOdom(transform_to_init_, header);
@@ -1076,6 +1106,7 @@ void Estimator::CalculateFeatures(const pcl::KdTreeFLANN<PointT>::Ptr &kdtree_su
 #endif
 
   PointT point_sel, point_ori, point_proj, coeff1, coeff2;
+  // keep_features indoor是1  outdoor是0
   if (!estimator_config_.keep_features) {
     features.clear();
   }
@@ -1190,6 +1221,7 @@ void Estimator::CalculateFeatures(const pcl::KdTreeFLANN<PointT>::Ptr &kdtree_su
           unique_ptr<PointPlaneFeature> feature = std::make_unique<PointPlaneFeature>();
           feature->score = s;
           feature->point = Eigen::Vector3d{point_ori.x, point_ori.y, point_ori.z};
+          // 残差
           feature->coeffs = Eigen::Vector4d{coeff1.x, coeff1.y, coeff1.z, coeff1.intensity};
           features.push_back(std::move(feature));
         }
@@ -1459,14 +1491,18 @@ void Estimator::CalculateLaserOdom(const pcl::KdTreeFLANN<PointT>::Ptr &kdtree_s
   }
 }
 
+// 构建局部地图
 void Estimator::BuildLocalMap(vector<FeaturePerFrame> &feature_frames) {
   feature_frames.clear();
 
   TicToc t_build_map;
 
+  // opt_window 中的局部地图
+  // 保存局部地图的
   local_surf_points_ptr_.reset();
   local_surf_points_ptr_ = boost::make_shared<PointCloud>(PointCloud());
 
+  // 体素滤波后的局部地图
   local_surf_points_filtered_ptr_.reset();
   local_surf_points_filtered_ptr_ = boost::make_shared<PointCloud>(PointCloud());
 
@@ -1481,7 +1517,10 @@ void Estimator::BuildLocalMap(vector<FeaturePerFrame> &feature_frames) {
 //  PointCloudPtr local_surf_points_filtered_ptr_(new PointCloud());
   PointCloud local_normal;
 
+  // local_transforms 存得 window 里，每一帧相对 pivot_idx 那一帧的相对位姿
   vector<Transform> local_transforms;
+  // pivot_idx = window - opt_window = 15 - 5 = 10
+  // opt_window的前一帧
   int pivot_idx = estimator_config_.window_size - estimator_config_.opt_window_size;
 
   Twist<double> transform_lb = transform_lb_.cast<double>();
@@ -1489,6 +1528,7 @@ void Estimator::BuildLocalMap(vector<FeaturePerFrame> &feature_frames) {
   Eigen::Vector3d Ps_pivot = Ps_[pivot_idx];
   Eigen::Matrix3d Rs_pivot = Rs_[pivot_idx];
 
+  // imu算出来的 lidar 帧间
   Quaterniond rot_pivot(Rs_pivot * transform_lb.rot.inverse());
   Eigen::Vector3d pos_pivot = Ps_pivot - rot_pivot * transform_lb.pos;
 
@@ -1507,6 +1547,8 @@ void Estimator::BuildLocalMap(vector<FeaturePerFrame> &feature_frames) {
 #endif
     //endregion
 
+    // 初始值为 false
+    // 局部地图初始化
     if (!init_local_map_) {
       PointCloud transformed_cloud_surf, tmp_cloud_surf;
 
@@ -1514,10 +1556,14 @@ void Estimator::BuildLocalMap(vector<FeaturePerFrame> &feature_frames) {
       PointCloud transformed_cloud_corner, tmp_cloud_corner;
 #endif
 
+      // 算 window 里 opt_window 前的数据，全加到 surf_stack_[pivot_idx] 里
+      // tmp_cloud_surf 作为临时变量
+      // Ps_ Rs_ 里存得好像不是帧间信息啊？？？？？？？？？？？？？？？？？？？？？？？？
       for (int i = 0; i <= pivot_idx; ++i) {
         Eigen::Vector3d Ps_i = Ps_[i];
         Eigen::Matrix3d Rs_i = Rs_[i];
 
+        // imu算出来的lidar帧间位姿变化
         Quaterniond rot_li(Rs_i * transform_lb.rot.inverse());
         Eigen::Vector3d pos_li = Ps_i - rot_li * transform_lb.pos;
 
@@ -1549,16 +1595,22 @@ void Estimator::BuildLocalMap(vector<FeaturePerFrame> &feature_frames) {
       Quaterniond rot_li(Rs_i * transform_lb.rot.inverse());
       Eigen::Vector3d pos_li = Ps_i - rot_li * transform_lb.pos;
 
+      // 
       Twist<double> transform_li = Twist<double>(rot_li, pos_li);
       Eigen::Affine3f transform_pivot_i = (transform_pivot.inverse() * transform_li).cast<float>().transform();
 
       Transform local_transform = transform_pivot_i;
+      // 保存 local_transform，第 i 帧相对于 pivot 的位姿
       local_transforms.push_back(local_transform);
 
+      // 如果在opt_window里，就进行下边的处理
       if (i < pivot_idx) {
         continue;
       }
 
+      // #############################################################
+      // 把 opt_window 中的点云都转到 opt_window 第一帧坐标系下
+      // 存到 local_surf_points_ptr_ 和 local_corner_points_ptr_ 里
       PointCloud transformed_cloud_surf, transformed_cloud_corner;
       //region fix the map
 #ifdef FIX_MAP
@@ -1602,6 +1654,7 @@ void Estimator::BuildLocalMap(vector<FeaturePerFrame> &feature_frames) {
 #endif
 #endif
         //endregion
+        // intensity 置 1？？？？？
         for (int p_idx = 0; p_idx < transformed_cloud_surf.size(); ++p_idx) {
           transformed_cloud_surf[p_idx].intensity = i;
         }
@@ -1642,6 +1695,10 @@ void Estimator::BuildLocalMap(vector<FeaturePerFrame> &feature_frames) {
   }
   //endregion
 
+
+
+
+  // 提取特征
   pcl::KdTreeFLANN<PointT>::Ptr kdtree_surf_from_map(new pcl::KdTreeFLANN<PointT>());
   kdtree_surf_from_map->setInputCloud(local_surf_points_filtered_ptr_);
 
@@ -1658,6 +1715,7 @@ void Estimator::BuildLocalMap(vector<FeaturePerFrame> &feature_frames) {
 
     TicToc t_features;
 
+    // 在 opt_window 中的点才提取特征
     if (idx > pivot_idx) {
       if (idx != estimator_config_.window_size || !estimator_config_.imu_factor) {
 #ifdef USE_CORNER
@@ -1774,9 +1832,11 @@ void Estimator::SolveOptimization() {
   if (estimator_config_.update_laser_imu) {
     DLOG(INFO) << "======= bef opt =======";
 
+    // imu_factor 默认参数应该是1
     if (!estimator_config_.imu_factor) {
       Twist<double>
           // 求 body 的增量
+          // body的位姿表示 T_lidar * T_lb
           incre = (transform_lb_.inverse() * all_laser_transforms_[cir_buf_count_ - 1].second.transform.inverse()
           * all_laser_transforms_[cir_buf_count_].second.transform * transform_lb_).cast<double>();
       Ps_[cir_buf_count_] = Rs_[cir_buf_count_ - 1] * incre.pos + Ps_[cir_buf_count_ - 1];
@@ -1784,12 +1844,16 @@ void Estimator::SolveOptimization() {
     }
 
     Twist<double> transform_lb = transform_lb_.cast<double>();
+    // window 和 opt_window 的差值
+    // 默认参数 pivot_idx = 15 - 5 = 10
     int pivot_idx = int(estimator_config_.window_size - estimator_config_.opt_window_size);
 
     Eigen::Vector3d Ps_pivot = Ps_[pivot_idx];
     Eigen::Vector3d Vs_pivot = Vs_[pivot_idx];
     Eigen::Matrix3d Rs_pivot = Rs_[pivot_idx];
 
+    // 这算出来的应该是 通过imu算出来的 lidar frame 下的变换吧？？？？？？？？？？？？？？？？？？？？？？？
+    // 帧间变换
     Quaterniond rot_pivot(Rs_pivot * transform_lb.rot.inverse());
     Eigen::Vector3d pos_pivot = Ps_pivot - rot_pivot * transform_lb.pos;
 
@@ -1798,9 +1862,12 @@ void Estimator::SolveOptimization() {
     vector<Transform> imu_poses, lidar_poses;
 
     for (int i = 0; i < estimator_config_.opt_window_size + 1; ++i) {
+      // 在 opt_window 中的index
       int opt_i = int(estimator_config_.window_size - estimator_config_.opt_window_size + i);
 
+      // imu算出来的 lidar frame 下帧间旋转
       Quaterniond rot_li(Rs_[opt_i] * transform_lb.rot.inverse());
+      // imu算出来的 lidar frame 下帧间位移
       Eigen::Vector3d pos_li = Ps_[opt_i] - rot_li * transform_lb.pos;
       Twist<double> transform_li = Twist<double>(rot_li, pos_li);
 
@@ -1815,8 +1882,11 @@ void Estimator::SolveOptimization() {
       // DLOG(INFO) << "transform_lb_: " << transform_lb_;
       // DLOG(INFO) << "gravity in world: " << g_vec_.transpose();
 
+      // 这里添加到序列里的都是 优化窗口里的
+      // body（imu） 的帧间变换
       Twist<double> transform_bi = Twist<double>(Eigen::Quaterniond(Rs_[opt_i]), Ps_[opt_i]);
       imu_poses.push_back(transform_bi.cast<float>());
+      // lidar 的帧间变换换
       lidar_poses.push_back(transform_li.cast<float>());
     }
 
@@ -1852,6 +1922,11 @@ void Estimator::SolveOptimization() {
   vector<double *> para_ids;
 
   //region Add pose and speed bias parameters
+  // 添加pose和speed bias 参数
+  // 因为过参数化的四元数或者旋转矩阵，不支持广义加法，需要自己定义更新方式
+  // 这里添加的参数 para_pose_  para_speed_bias_ 会在VectorToDouble()赋值（优化窗口中的值）
+  // para_pose_ 是7维的位姿信息
+  // para_speed_bias_  是9维的速度和bias信息    速度、ba、bg
   for (int i = 0; i < estimator_config_.opt_window_size + 1;
        ++i) {
     ceres::LocalParameterization *local_parameterization = new PoseLocalParameterization();
@@ -1863,6 +1938,8 @@ void Estimator::SolveOptimization() {
   //endregion
 
   //region Add extrinsic parameters
+  // 向problem中添加标定信息
+  // para_ex_pose_ 会在VectorToDouble()中进行赋值，7维的标定信息
   {
     ceres::LocalParameterization *local_parameterization = new PoseLocalParameterization();
     problem.AddParameterBlock(para_ex_pose_, SIZE_POSE, local_parameterization);
@@ -2550,15 +2627,18 @@ void Estimator::VectorToDouble() {
   P_pivot_ = Ps_[pivot_idx];
   R_pivot_ = Rs_[pivot_idx];
   for (i = 0, opt_i = pivot_idx; i < estimator_config_.opt_window_size + 1; ++i, ++opt_i) {
+    // 位置
     para_pose_[i][0] = Ps_[opt_i].x();
     para_pose_[i][1] = Ps_[opt_i].y();
     para_pose_[i][2] = Ps_[opt_i].z();
     Quaterniond q{Rs_[opt_i]};
+    // 旋转
     para_pose_[i][3] = q.x();
     para_pose_[i][4] = q.y();
     para_pose_[i][5] = q.z();
     para_pose_[i][6] = q.w();
 
+    // 速度  加速度bais  角速度bias
     para_speed_bias_[i][0] = Vs_[opt_i].x();
     para_speed_bias_[i][1] = Vs_[opt_i].y();
     para_speed_bias_[i][2] = Vs_[opt_i].z();
@@ -2574,6 +2654,7 @@ void Estimator::VectorToDouble() {
 
   {
     /// base to lidar
+    // base2lidar的标定信息
     para_ex_pose_[0] = transform_lb_.pos.x();
     para_ex_pose_[1] = transform_lb_.pos.y();
     para_ex_pose_[2] = transform_lb_.pos.z();
@@ -2812,6 +2893,7 @@ void Estimator::ProcessEstimation() {
           rx = imu_msg->angular_velocity.x;
           ry = imu_msg->angular_velocity.y;
           rz = imu_msg->angular_velocity.z;
+          // 处理imu数据    做中值积分
           ProcessImu(dt, Vector3d(ax, ay, az), Vector3d(rx, ry, rz), imu_msg->header);
 
         } else {
@@ -2836,6 +2918,7 @@ void Estimator::ProcessEstimation() {
           rx = w1 * rx + w2 * imu_msg->angular_velocity.x;
           ry = w1 * ry + w2 * imu_msg->angular_velocity.y;
           rz = w1 * rz + w2 * imu_msg->angular_velocity.z;
+          // 处理imu数据    做中值积分
           ProcessImu(dt_1, Vector3d(ax, ay, az), Vector3d(rx, ry, rz), imu_msg->header);
 
         }

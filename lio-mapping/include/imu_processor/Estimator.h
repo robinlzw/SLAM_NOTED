@@ -127,6 +127,13 @@ class Estimator : public MeasurementManager, public PointMapping {
   void ProcessLaserOdom(const Transform &transform_in, const std_msgs::Header &header);
   void ProcessCompactData(const sensor_msgs::PointCloud2ConstPtr &compact_data, const std_msgs::Header &header);
 
+  /*
+  FeaturePerFrame的数据结构如下
+  struct FeaturePerFrame {
+    int id;
+    std::vector<unique_ptr<Feature>> features;
+  };
+  */
   void BuildLocalMap(vector<FeaturePerFrame> &feature_frames);
 
 #ifdef USE_CORNER
@@ -174,6 +181,8 @@ class Estimator : public MeasurementManager, public PointMapping {
 
   int extrinsic_stage_ = 2;
 
+  // 存的是 opt_window 里，对齐到opt_window的第一帧
+  // 一个是直接写入的，后一个是降采样后的
   PointCloudPtr local_surf_points_ptr_, local_surf_points_filtered_ptr_;
   PointCloudPtr local_corner_points_ptr_, local_corner_points_filtered_ptr_;
 
@@ -209,20 +218,31 @@ class Estimator : public MeasurementManager, public PointMapping {
   CircularBuffer<Vector3d> Ps_linearized_{estimator_config_.window_size + 1};
   CircularBuffer<Matrix3d> Rs_linearized_{estimator_config_.window_size + 1};
 #endif
+  // 存了点云的尺寸
   CircularBuffer<size_t> size_surf_stack_{estimator_config_.window_size + 1};
   CircularBuffer<size_t> size_corner_stack_{estimator_config_.window_size + 1};
   bool init_local_map_ = false;
   //endregion
 
+  // 时间戳
   CircularBuffer<std_msgs::Header> Headers_{estimator_config_.window_size + 1};
 
+  // imu相关
+  // 时间间隔
   CircularBuffer<vector<double> > dt_buf_{estimator_config_.window_size + 1};
+  // 线速度
   CircularBuffer<vector<Vector3d> > linear_acceleration_buf_{estimator_config_.window_size + 1};
+  // 角速度
   CircularBuffer<vector<Vector3d> > angular_velocity_buf_{estimator_config_.window_size + 1};
-
+  // 预积分
   CircularBuffer<shared_ptr<IntegrationBase> > pre_integrations_{estimator_config_.window_size + 1};
+
+  // 点云相关，应该是降采样后的吧（应该都是局部点云）
+  // 面点 
   CircularBuffer<PointCloudPtr> surf_stack_{estimator_config_.window_size + 1};
+  // 角点
   CircularBuffer<PointCloudPtr> corner_stack_{estimator_config_.window_size + 1};
+  // 全部
   CircularBuffer<PointCloudPtr> full_stack_{estimator_config_.window_size + 1};
 
   ///> optimization buffers
@@ -242,12 +262,14 @@ class Estimator : public MeasurementManager, public PointMapping {
   ///< optimization buffers
 
 //  Transform transform_lb_{Eigen::Quaternionf(1, 0, 0, 0), Eigen::Vector3f(-0.05, 0, 0.05)}; ///< Base to laser transform
+  // 标定信息，在初始化的时候会
   // base 2 laser 的变换阵
   // base to lidar的变换
   // base应该就作为inertial了（应该是吧）
   Transform transform_lb_{Eigen::Quaternionf(1, 0, 0, 0), Eigen::Vector3f(0, 0, -0.1)}; ///< Base to laser transform
 
   // 默认值为不旋转
+  // 标定的时候会调整
   // inertial frame 到 world frame的旋转R
   Eigen::Matrix3d R_WI_; ///< R_WI is the rotation from the inertial frame into Lidar's world frame
   // inertial frame 到 world frame的旋转旋转q
@@ -292,6 +314,7 @@ class Estimator : public MeasurementManager, public PointMapping {
   CircularBuffer<StampedTransform> imu_stampedtransforms{100};
 
  private:
+  // 优化参数
   double **para_pose_;
   double **para_speed_bias_;
   double para_ex_pose_[SIZE_POSE];
@@ -299,7 +322,10 @@ class Estimator : public MeasurementManager, public PointMapping {
   double g_norm_;
   bool gravity_fixed_ = false;
 
+  // 暂且认为
+  // 上一帧未map的位姿
   Transform transform_tobe_mapped_bef_;
+  // 当前帧未map的位姿（通过imu估计得到）
   Transform transform_es_;
 
   // for marginalization

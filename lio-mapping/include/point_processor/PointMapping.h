@@ -213,9 +213,13 @@ class PointMapping {
   bool new_laser_full_cloud_;     ///< flag if a new full resolution cloud has been received
   bool new_laser_odometry_;         ///< flag if a new laser odometry has been received
 
+  // odometry输出的里程计位姿，全局的
   Transform transform_sum_;
+  // 从里程计到mapping过程中，都用的这个变量
   Transform transform_tobe_mapped_;
+  // mapping前的位姿（应该和sum_是对应的吧）
   Transform transform_bef_mapped_;
+  // mapping后的输出位姿
   Transform transform_aft_mapped_;
 
   pcl::VoxelGrid<pcl::PointXYZI> down_size_filter_corner_;   ///< voxel filter for down sizing corner clouds

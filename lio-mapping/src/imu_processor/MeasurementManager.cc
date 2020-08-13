@@ -45,6 +45,8 @@ void MeasurementManager::SetupRos(ros::NodeHandle &nh) {
                                              ros::TransportHints().tcpNoDelay());
 
   // 订阅话题 /compact_data  来自PointOdometry
+  // 其中的点云应该都是，去除畸变后的局部点
+  // 位姿是odometry出来的全局位姿
   sub_compact_data_ = nh_.subscribe<sensor_msgs::PointCloud2>(mm_config_.compact_data_topic,
                                                               10,
                                                               &MeasurementManager::CompactDataHandler,

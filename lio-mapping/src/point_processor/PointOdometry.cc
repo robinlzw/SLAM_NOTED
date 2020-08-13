@@ -770,6 +770,7 @@ void PointOdometry::PublishResults() {
       // pub_compact_data_ = nh.advertise<sensor_msgs::PointCloud2>("/compact_data", 2);
       // 该数据含有：
       // 1：位置 xyz  2：旋转 xyzi  3：corner surf full 的size对应xyz  4 三个点云追加到后边
+      // 这里的点云应该都是去了畸变以后的局部点
       PublishCloudMsg(pub_compact_data_, compact_data, sweepTime, "/camera");
 
       ROS_DEBUG_STREAM("encode compact data and publish time: " << tic_toc_encoder.Toc() << " ms");
