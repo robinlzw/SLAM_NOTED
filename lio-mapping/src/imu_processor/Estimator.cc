@@ -1133,6 +1133,7 @@ void Estimator::CalculateFeatures(const pcl::KdTreeFLANN<PointT>::Ptr &kdtree_su
   vector<float> scores;
 
   const PointCloudPtr &origin_surf_points = surf_stack;
+  // local_transform 是转到 pivot 帧的变换
   const Transform &transform_to_local = local_transform;
   size_t surf_points_size = origin_surf_points->points.size();
 
@@ -1144,10 +1145,13 @@ void Estimator::CalculateFeatures(const pcl::KdTreeFLANN<PointT>::Ptr &kdtree_su
 //    DLOG(INFO) << "transform_to_local: " << transform_to_local;
 
   for (int i = 0; i < surf_points_size; i++) {
+    // 局部点
     point_ori = origin_surf_points->points[i];
+    // 转到map坐标系下
     PointAssociateToMap(point_ori, point_sel, transform_to_local);
 
     int num_neighbors = 5;
+    // kdtree_surf_from_map 已经和 local map 绑定了
     kdtree_surf_from_map->nearestKSearch(point_sel, num_neighbors, point_search_idx, point_search_sq_dis);
 
     if (point_search_sq_dis[num_neighbors - 1] < min_match_sq_dis_) {
@@ -1156,8 +1160,13 @@ void Estimator::CalculateFeatures(const pcl::KdTreeFLANN<PointT>::Ptr &kdtree_su
         mat_A0(j, 1) = local_surf_points_filtered_ptr->points[point_search_idx[j]].y;
         mat_A0(j, 2) = local_surf_points_filtered_ptr->points[point_search_idx[j]].z;
       }
+      // QR分解 得到Ax=b中 x的解
+      // mat_A0 每行是平面点采样坐标xyz
+      // mat_B0 是值全为-1的向量
+      // 求出来的 x 应该是法向量，朝向origin那一侧，模可能与到origin距离成反比
       mat_X0 = mat_A0.colPivHouseholderQr().solve(mat_B0);
 
+      // 对法向量做一个归一化
       float pa = mat_X0(0, 0);
       float pb = mat_X0(1, 0);
       float pc = mat_X0(2, 0);
@@ -1187,6 +1196,7 @@ void Estimator::CalculateFeatures(const pcl::KdTreeFLANN<PointT>::Ptr &kdtree_su
 
         float s = 1 - 0.9f * fabs(pd2) / sqrt(CalcPointDistance(point_sel));
 
+        // 系数
         coeff1.x = s * pa;
         coeff1.y = s * pb;
         coeff1.z = s * pc;
@@ -1213,15 +1223,19 @@ void Estimator::CalculateFeatures(const pcl::KdTreeFLANN<PointT>::Ptr &kdtree_su
         float check2 = 100.0f + squared_side1 - squared_side2
             + 10.0f * sqrt(3.0f) * sqrt(squared_side1);
 
+        // 检测 point_sel 是否在视野范围内
         if (check1 < 0 && check2 > 0) { /// within +-60 degree
           is_in_laser_fov = true;
         }
 
+        // 
         if (s > 0.1 && is_in_laser_fov) {
           unique_ptr<PointPlaneFeature> feature = std::make_unique<PointPlaneFeature>();
+          // 权重
           feature->score = s;
+          // 点的局部坐标
           feature->point = Eigen::Vector3d{point_ori.x, point_ori.y, point_ori.z};
-          // 残差
+          // 残差需要的系数
           feature->coeffs = Eigen::Vector4d{coeff1.x, coeff1.y, coeff1.z, coeff1.intensity};
           features.push_back(std::move(feature));
         }
@@ -1234,11 +1248,14 @@ void Estimator::CalculateFeatures(const pcl::KdTreeFLANN<PointT>::Ptr &kdtree_su
   for (int i = 0; i < corner_points_size; i++) {
     point_ori = origin_corner_points->points[i];
     PointAssociateToMap(point_ori, point_sel, transform_to_local);
+    // 搜索周围5个点
+    // 和局部地图的corner绑定了
     kdtree_corner_from_map->nearestKSearch(point_sel, 5, point_search_idx, point_search_sq_dis);
 
     if (point_search_sq_dis[4] < min_match_sq_dis_) {
       Eigen::Vector3f vc(0, 0, 0);
 
+      // 求最近5点的均值
       for (int j = 0; j < 5; j++) {
         const PointT &point_sel_tmp = local_corner_points_filtered_ptr->points[point_search_idx[j]];
         vc.x() += point_sel_tmp.x;
@@ -1250,6 +1267,8 @@ void Estimator::CalculateFeatures(const pcl::KdTreeFLANN<PointT>::Ptr &kdtree_su
       Eigen::Matrix3f mat_a;
       mat_a.setZero();
 
+      // vc作为均值，求协方差阵
+      // 只算了下三角
       for (int j = 0; j < 5; j++) {
         const PointT &point_sel_tmp = local_corner_points_filtered_ptr->points[point_search_idx[j]];
         Eigen::Vector3f a;
@@ -1266,12 +1285,18 @@ void Estimator::CalculateFeatures(const pcl::KdTreeFLANN<PointT>::Ptr &kdtree_su
       }
       mat_A1 = mat_a / 5.0;
 
+      // 求解自共轭矩阵的 特征值 和 特征向量
       Eigen::SelfAdjointEigenSolver<Eigen::Matrix3f> esolver(mat_A1);
+      // 特征值 和特征向量
+      // 取实部
       mat_D1 = esolver.eigenvalues().real();
       mat_V1 = esolver.eigenvectors().real();
 
+      // 特征值是降序的？？？
+      // 某个特征值比较大，也就是某个方向分布比较明显
       if (mat_D1(0, 2) > 3 * mat_D1(0, 1)) {
 
+        // 沿着主特征向量 扩展0.1的距离 得到两个点
         float x0 = point_sel.x;
         float y0 = point_sel.y;
         float z0 = point_sel.z;
@@ -1286,10 +1311,13 @@ void Estimator::CalculateFeatures(const pcl::KdTreeFLANN<PointT>::Ptr &kdtree_su
         Eigen::Vector3f X1(x1, y1, z1);
         Eigen::Vector3f X2(x2, y2, z2);
 
+        // 01和02叉乘， a012_vec 垂直于012平面
         Eigen::Vector3f a012_vec = (X0 - X1).cross(X0 - X2);
 
+        // 21和a012_vec叉乘  得到 normal_to_point 垂直于12 平行012平面
         Eigen::Vector3f normal_to_point = ((X1 - X2).cross(a012_vec)).normalized();
 
+        // 
         Eigen::Vector3f normal_cross_point = (X1 - X2).cross(normal_to_point);
 
         float a012 = a012_vec.norm();
@@ -1710,6 +1738,8 @@ void Estimator::BuildLocalMap(vector<FeaturePerFrame> &feature_frames) {
   for (int idx = 0; idx < estimator_config_.window_size + 1; ++idx) {
 
     FeaturePerFrame feature_per_frame;
+    // features 存储了 window_size 中所有feature的序列
+    // feature 存了 s  point_ori(局部坐标)  coeff
     vector<unique_ptr<Feature>> features;
 //    vector<unique_ptr<Feature>> &features = feature_per_frame.features;
 
@@ -1718,6 +1748,7 @@ void Estimator::BuildLocalMap(vector<FeaturePerFrame> &feature_frames) {
     // 在 opt_window 中的点才提取特征
     if (idx > pivot_idx) {
       if (idx != estimator_config_.window_size || !estimator_config_.imu_factor) {
+        // corner的计算暂时还没看。。。。。。
 #ifdef USE_CORNER
         CalculateFeatures(kdtree_surf_from_map, local_surf_points_filtered_ptr_, surf_stack_[idx],
                           kdtree_corner_from_map, local_corner_points_filtered_ptr_, corner_stack_[idx],
@@ -1824,7 +1855,7 @@ void Estimator::SolveOptimization() {
   ceres::LossFunction *loss_function;
   // NOTE: indoor test
 //  loss_function = new ceres::HuberLoss(0.5);
-  // 柯西鲁棒和函数
+  // 柯西鲁棒核函数
   loss_function = new ceres::CauchyLoss(1.0);
 
   // NOTE: update from laser transform
