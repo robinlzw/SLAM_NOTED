@@ -146,9 +146,9 @@ inline Eigen::Matrix<typename Derived::Scalar, 4, 4> LeftQuatMatrix(const Eigen:
   // q4 是 q的实部
   typename Derived::Scalar q4 = q.w();
   // m = 
-  //  q0  -q3   q2  0
-  //  q3   q0  -q1  0
-  // -q2   q1   q0  0
+  //  q0  -q3   q2  q1
+  //  q3   q0  -q1  q2
+  // -q2   q1   q0  q3
   // -q1  -q2  -q3  q0
   //
   m.block(0, 0, 3, 3) << q4 * I3x3 + SkewSymmetric(vq);
@@ -165,9 +165,9 @@ inline Eigen::Matrix<typename Derived::Scalar, 4, 4> RightQuatMatrix(const Eigen
   Eigen::Matrix<typename Derived::Scalar, 3, 1> vp = p.vec();
   typename Derived::Scalar p4 = p.w();
   // m = 
-  //  q0   q3  -q2  0
-  // -q3   q0   q1  0
-  //  q2  -q1   q0  0
+  //  q0   q3  -q2  q1
+  // -q3   q0   q1  q2
+  //  q2  -q1   q0  q3
   // -q1  -q2  -q3  q0
   //
   m.block(0, 0, 3, 3) << p4 * I3x3 - SkewSymmetric(vp);

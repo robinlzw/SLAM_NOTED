@@ -365,10 +365,10 @@ bool ImuInitializer::EstimateExtrinsicRotation(CircularBuffer<PairTimeLaserTrans
     PairTimeLaserTransform &laser_trans_i = all_laser_transforms[i];
     PairTimeLaserTransform &laser_trans_j = all_laser_transforms[i + 1];
 
-    // imu增量
+    // imu增量（body旋转增量）  q bi-bj
     Eigen::Quaterniond delta_qij_imu = laser_trans_j.second.pre_integration->delta_q_;
 
-    // lidar增量
+    // lidar增量  q li-lj
     Eigen::Quaterniond delta_qij_laser
         = (laser_trans_i.second.transform.rot.conjugate() * laser_trans_j.second.transform.rot).template cast<double>();
 
@@ -376,17 +376,41 @@ bool ImuInitializer::EstimateExtrinsicRotation(CircularBuffer<PairTimeLaserTrans
     Eigen::Quaterniond delta_qij_laser_from_imu = rot_bl.conjugate() * delta_qij_imu * rot_bl;
 
     // 两个旋转之间的角度，以弧度表示
-    // 转成了角度，这里就是残差了
+    // 转成了角度，两个角度间的差，用来算 huber鲁棒权重
     double angular_distance = 180 / M_PI * delta_qij_laser.angularDistance(delta_qij_laser_from_imu);
 
 //    DLOG(INFO) << i << ", " << angular_distance;
 
-    // 类似于 huber 核函数，限制
+    // 类似于 huber 核函数，限制过大的残差
+    // 使得 huber * residual <= 1
     double huber = angular_distance > 5.0 ? 5.0 / angular_distance : 1.0;
+
+    // 如果坐标系已对齐  qli-lj * ql-b = ql-b * qbi-bj 应该成立
+    // q = [q1 q2 q3, q0]
+    // 最后算出来的4维向量按照上式顺序
+
+    // qli-lj 和 qbi-bj 转成了左/右乘的矩阵形式 Ql * ql-b = Qr * ql-b
+
+    // LeftQuatMatrix 得到的矩阵
+    // m = 
+    //  q0  -q3   q2  q1
+    //  q3   q0  -q1  q2
+    // -q2   q1   q0  q3
+    // -q1  -q2  -q3  q0
+    //
+
+    // RightQuatMatrix 得到的矩阵
+    // m = 
+    //  q0   q3  -q2  q1
+    // -q3   q0   q1  q2
+    //  q2  -q1   q0  q3
+    // -q1  -q2  -q3  q0
+    //
 
     Eigen::Matrix4d lq_mat = LeftQuatMatrix(delta_qij_laser);
     Eigen::Matrix4d rq_mat = RightQuatMatrix(delta_qij_imu);
 
+    // (Ql - Qr) q = 0  求解最小二乘问题
     A.block<4, 4>(i * 4, 0) = huber * (lq_mat - rq_mat);
 
 //    cout << (lq_mat * transform_lb.rot.coeffs().template cast<double>()).transpose() << endl;
@@ -404,7 +428,8 @@ bool ImuInitializer::EstimateExtrinsicRotation(CircularBuffer<PairTimeLaserTrans
   // SVD分解  J=UEV^T
   // U = svd.matrixU()
   // V = svd.matrixV()
-  // A = svd.singularValues();  sigma的对角线元素
+  // A = svd.singularValues();  sigma的对角线元素（这里就是奇异值）
+  // 加上||x||=1的限制条件，最小奇异值对应的特征向量就是解，也就是VT的最后一列
   Eigen::JacobiSVD<MatrixXd> svd(A, Eigen::ComputeFullU | Eigen::ComputeFullV);
   Eigen::Matrix<double, 4, 1> x = svd.matrixV().col(3);
   Quaterniond estimated_qlb(x);
