@@ -317,6 +317,7 @@ class Estimator : public MeasurementManager, public PointMapping {
   // 优化参数
   double **para_pose_;
   double **para_speed_bias_;
+  // 存的是 transform_lb_ 7维
   double para_ex_pose_[SIZE_POSE];
 //  double para_qwi_[SIZE_QUAT];
   double g_norm_;

@@ -596,6 +596,7 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
 
           DLOG(INFO) << "initialization time: " << tic_toc_.Toc() << " ms";
 
+          // 如果已经初始化了，就进行优化和滑动窗口处理
           if (init_result) {
             // 初始化以后，stage_flag_置INITED
             stage_flag_ = INITED;
@@ -635,10 +636,13 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
               DLOG(INFO) << "TEST all_laser_transforms " << i << ": " << all_laser_transforms_[i].second.transform;
             }
 
+            // 解决BA优化问题
             SolveOptimization();
 
             SlideWindow();
 
+
+            // 输出优化后的信息吧？？？？？？？？？
             for (size_t i = 0; i < estimator_config_.window_size + 1;
                  ++i) {
               const Transform &trans_li = all_laser_transforms_[i].second.transform;
@@ -661,6 +665,7 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
             // WARNING
 
           } else {
+            // 还没初始化，只滑动窗口
             SlideWindow();
           }
 
@@ -693,11 +698,13 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
 
         if (opt_point_coeff_map_.size() == estimator_config_.opt_window_size + 1) {
 
+          // 这里应该是做畸变矫正
           if (estimator_config_.enable_deskew || estimator_config_.cutoff_deskew) {
             TicToc t_deskew;
             t_deskew.Tic();
             // TODO: the coefficients to be parameterized
             DLOG(INFO) << ">>>>>>> de-skew points <<<<<<<";
+            // imu_stampedtransforms 是在processIMU里的存储积分变量的循环队列
             LOG_ASSERT(imu_stampedtransforms.size() > 0) << "no imu data";
             double time_e = imu_stampedtransforms.last().time;
             Transform transform_e = imu_stampedtransforms.last().transform;
@@ -715,6 +722,7 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
 //            vel2 = Rs_[estimator_config_.window_size].transpose() * Vs_[estimator_config_.window_size];
 //            body_velocity = (vel1 + vel2) / 2;
 
+            // transform_e 是last imu数据对应的变换, transform_s 是前0.1秒对应的变换
             Transform transform_body_es = transform_e.inverse() * transform_s;
 //            transform_body_es.pos = -0.1 * body_velocity.cast<float>();
             {
@@ -1390,6 +1398,9 @@ void Estimator::CalculateFeatures(const pcl::KdTreeFLANN<PointT>::Ptr &kdtree_su
 #endif
 }
 
+
+// 在该函数中，把 local_transform 更新成了迭代更新后的值
+// 具体怎么算的还没仔细看
 #ifdef USE_CORNER
 void Estimator::CalculateLaserOdom(const pcl::KdTreeFLANN<PointT>::Ptr &kdtree_surf_from_map,
                                    const PointCloudPtr &local_surf_points_filtered_ptr,
@@ -1747,6 +1758,7 @@ void Estimator::BuildLocalMap(vector<FeaturePerFrame> &feature_frames) {
 
     // 在 opt_window 中的点才提取特征
     if (idx > pivot_idx) {
+      // 如果不是最后一帧点云，也就是
       if (idx != estimator_config_.window_size || !estimator_config_.imu_factor) {
         // corner的计算暂时还没看。。。。。。
 #ifdef USE_CORNER
@@ -1758,8 +1770,11 @@ void Estimator::BuildLocalMap(vector<FeaturePerFrame> &feature_frames) {
                           local_transforms[idx], features);
 #endif
       } else {
+        // 到了 opt_window的最后一帧，以下也就是处理最新一帧点云的过程
+        // 在此之前的 local_transforms 都是imu得到的值
         DLOG(INFO) << "local_transforms[idx] bef" << local_transforms[idx];
 
+        // 计算当前帧（opt_window中的最后一帧）的位姿变换，更新对应的 local_transforms
 #ifdef USE_CORNER
         CalculateLaserOdom(kdtree_surf_from_map, local_surf_points_filtered_ptr_, surf_stack_[idx],
                            kdtree_corner_from_map, local_corner_points_filtered_ptr_, corner_stack_[idx],
@@ -1948,6 +1963,8 @@ void Estimator::SolveOptimization() {
 
   vector<FeaturePerFrame> feature_frames;
 
+  // 构建局部地图，记录当前 window 里的featrue
+  // feature_frames 记录了window里每帧的特征信息
   BuildLocalMap(feature_frames);
 
   vector<double *> para_ids;
@@ -1955,7 +1972,7 @@ void Estimator::SolveOptimization() {
   //region Add pose and speed bias parameters
   // 添加pose和speed bias 参数
   // 因为过参数化的四元数或者旋转矩阵，不支持广义加法，需要自己定义更新方式
-  // 这里添加的参数 para_pose_  para_speed_bias_ 会在VectorToDouble()赋值（优化窗口中的值）
+  // 这里添加的参数 para_pose_  para_speed_bias_ 会在 VectorToDouble() 赋值（优化窗口中的值）
   // para_pose_ 是7维的位姿信息
   // para_speed_bias_  是9维的速度和bias信息    速度、ba、bg
   for (int i = 0; i < estimator_config_.opt_window_size + 1;
@@ -1992,6 +2009,7 @@ void Estimator::SolveOptimization() {
   ceres::internal::ResidualBlock *res_id_marg = NULL;
 
   //region Marginalization residual
+  // 边缘化残差块
   if (estimator_config_.marginalization_factor) {
     if (last_marginalization_info) {
       // construct new marginlization_factor
@@ -2005,6 +2023,7 @@ void Estimator::SolveOptimization() {
 
   vector<ceres::internal::ResidualBlock *> res_ids_pim;
 
+  // imu残差块
   if (estimator_config_.imu_factor) {
 
     for (int i = 0; i < estimator_config_.opt_window_size;
@@ -2044,6 +2063,7 @@ void Estimator::SolveOptimization() {
 
   vector<ceres::internal::ResidualBlock *> res_ids_proj;
 
+  // lidar 特征点残差块
   if (estimator_config_.point_distance_factor) {
     for (int i = 0; i < estimator_config_.opt_window_size + 1; ++i) {
       int opt_i = int(estimator_config_.window_size - estimator_config_.opt_window_size + i);
@@ -2104,6 +2124,7 @@ void Estimator::SolveOptimization() {
     }
   }
 
+  // 先验残差块
   if (estimator_config_.prior_factor) {
     {
       Twist<double> trans_tmp = transform_lb_.cast<double>();
@@ -2122,6 +2143,8 @@ void Estimator::SolveOptimization() {
   DLOG(INFO) << "prepare for ceres: " << tic_toc_opt.Toc() << " ms";
   ROS_DEBUG_STREAM("prepare for ceres: " << tic_toc_opt.Toc() << " ms");
 
+
+  // 求解器配置
   ceres::Solver::Options options;
 
   options.linear_solver_type = ceres::DENSE_SCHUR;
@@ -2148,6 +2171,7 @@ void Estimator::SolveOptimization() {
       DLOG(INFO) << "bef_pim: " << cost_pim;
 
 //      if (cost > 1e3 || !convergence_flag_) {
+      // turn_off 在函数前边初始化为 true
       if (cost_pim > 1e3) {
         turn_off = true;
       } else {
@@ -2787,9 +2811,16 @@ void Estimator::DoubleToVector() {
   }
 }
 
+
+// 滑动窗口
+// 该函数只针对 states 和 局部地图
+// 把最老的一帧点云去掉了
+// 对 dt_buf_   linear_acceleration_buf_  angular_velocity_buf_  同样操作，由于是循环队列，加一个空序列，把最老的顶掉
+// Ps_  Vs_  Rs_  Bas_  Bgs_  同样
 void Estimator::SlideWindow() { // NOTE: this function is only for the states and the local map
 
   {
+    // 地图初始化后才进行这一步
     if (init_local_map_) {
       int pivot_idx = estimator_config_.window_size - estimator_config_.opt_window_size;
 
@@ -2801,6 +2832,7 @@ void Estimator::SlideWindow() { // NOTE: this function is only for the states an
       Quaterniond rot_pivot(Rs_pivot * transform_lb.rot.inverse());
       Eigen::Vector3d pos_pivot = Ps_pivot - rot_pivot * transform_lb.pos;
 
+      // transform_pivot 对应 pivot 的变换
       Twist<double> transform_pivot = Twist<double>(rot_pivot, pos_pivot);
 
       PointCloudPtr transformed_cloud_surf_ptr(new PointCloud);
@@ -2812,9 +2844,11 @@ void Estimator::SlideWindow() { // NOTE: this function is only for the states an
       Eigen::Vector3d Ps_i = Ps_[i];
       Eigen::Matrix3d Rs_i = Rs_[i];
 
+      // body（imu数据）推算得到的 lidar 的位姿
       Quaterniond rot_li(Rs_i * transform_lb.rot.inverse());
       Eigen::Vector3d pos_li = Ps_i - rot_li * transform_lb.pos;
 
+      // transform_li 是通过imu数据算出来的
       Twist<double> transform_li = Twist<double>(rot_li, pos_li);
       Eigen::Affine3f transform_i_pivot = (transform_li.inverse() * transform_pivot).cast<float>().transform();
       pcl::ExtractIndices<PointT> extract;
@@ -2827,6 +2861,8 @@ void Estimator::SlideWindow() { // NOTE: this function is only for the states an
       }
       extract.setInputCloud(transformed_cloud_surf_ptr);
       extract.setIndices(inliers_surf);
+      // true：提取指定index之外的点云
+      // false：提取指定index的点云
       extract.setNegative(true);
       extract.filter(filtered_surf_points);
 
