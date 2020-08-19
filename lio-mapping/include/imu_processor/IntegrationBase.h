@@ -205,7 +205,7 @@ class IntegrationBase {
       F.block<3, 3>(0, 9) = -0.25 * (delta_q.toRotationMatrix() + result_delta_q.toRotationMatrix()) * dt * dt;
 //      F.block<3, 3>(0, 12) = -0.25 * result_delta_q.toRotationMatrix() * R_a_1_x * dt * dt * -dt;
       F.block<3, 3>(0, 12) = -0.1667 * result_delta_q.toRotationMatrix() * R_a_1_x * dt * dt * -dt;
-      // 第二行 角度对 q 对各项求导
+      // 第二行 角度 q 对各项求导
       F.block<3, 3>(3, 3) = Matrix3d::Identity() - R_w_x * dt;
       F.block<3, 3>(3, 12) = -1.0 * MatrixXd::Identity(3, 3) * dt;
       // 第三行 速度 v 对各项求导
@@ -242,6 +242,7 @@ class IntegrationBase {
       //step_jacobian = F;
       //step_V = V;
       // 当前帧的雅可比 也有传递吗？？？
+      // F
       jacobian_ = F * jacobian_;
       // 协方差传递 如下形式 
       // dx(k+1) = F * dx(k) + V * noise

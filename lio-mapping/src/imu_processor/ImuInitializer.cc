@@ -46,6 +46,8 @@ MatrixXd TangentBasis(Vector3d &g0) {
   return bc;
 }
 
+
+// 估计陀螺仪bias
 void EstimateGyroBias(CircularBuffer<PairTimeLaserTransform> &all_laser_transforms,
                       CircularBuffer<Vector3d> &Bgs) {
   Matrix3d A;
@@ -98,6 +100,7 @@ void EstimateGyroBias(CircularBuffer<PairTimeLaserTransform> &all_laser_transfor
 
 }
 
+// 优化重力加速度向量
 bool ApproximateGravity(CircularBuffer<PairTimeLaserTransform> &all_laser_transforms, Vector3d &g,
                         Transform &transform_lb) {
 
