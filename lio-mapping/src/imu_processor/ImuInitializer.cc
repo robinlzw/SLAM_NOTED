@@ -68,20 +68,29 @@ void EstimateGyroBias(CircularBuffer<PairTimeLaserTransform> &all_laser_transfor
     tmp_A.setZero();
     VectorXd tmp_b(3);
     tmp_b.setZero();
+    // q_ij 即lidar的qci-ci+1
     Eigen::Quaterniond q_ij(laser_trans_i.second.transform.rot.conjugate() * laser_trans_j.second.transform.rot);
+    // 旋转q对 陀螺仪bias 的导数
+    // 在jacobian_所处位置  (3,12)起始的 3x3 block
     tmp_A = laser_trans_j.second.pre_integration->jacobian_.template block<3, 3>(O_R, O_BG); /// Jacobian of dr12_bg
+    // 2*vec(IMU_ij^T * q_ij)
     tmp_b = 2 * (laser_trans_j.second.pre_integration->delta_q_.conjugate() * q_ij).vec(); /// 2*vec(IMU_ij^T * q_ij)
+    // Jbt * Jb
     A += tmp_A.transpose() * tmp_A;
+    // Jbt * 2 * vec(IMU_ij^T * q_ij)
     b += tmp_A.transpose() * tmp_b;
 
   }
+  // 需要调整的 bg 数值
   delta_bg = A.ldlt().solve(b);
   DLOG(WARNING) << "gyroscope bias initial calibration: " << delta_bg.transpose();
 
+  // 调整所有已有 bg
   for (int i = 0; i <= window_size; ++i) {
     Bgs[i] += delta_bg;
   }
 
+  // bias 更新了，需要重新传递
   for (size_t i = 0; i < window_size; ++i) {
     PairTimeLaserTransform &laser_trans_j = all_laser_transforms[i + 1];
     laser_trans_j.second.pre_integration->Repropagate(Vector3d::Zero(), Bgs[0]);

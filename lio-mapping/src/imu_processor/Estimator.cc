@@ -529,6 +529,7 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
   ///< optimization buffers
 
   if (estimator_config_.run_optimization) {
+    // stage_flag_ 一共有两个状态  未初始化 NOT_INITED  已初始化 INITED
     switch (stage_flag_) {
       /*************************************************************************/
       // 检测是否初始化
@@ -586,7 +587,7 @@ void Estimator::ProcessLaserOdom(const Transform &transform_in, const std_msgs::
               }
             }
 
-            // 第二步，imu参数初始化，似乎每次都需要初始化这个值
+            // 第二步，imu参数初始化：陀螺仪bias、优化重力、重力和加速度bias
             if (extrinsic_stage_ != 2 && (header.stamp.toSec() - initial_time_) > 0.1) {
               DLOG(INFO) << "EXTRINSIC STAGE: " << extrinsic_stage_;
               init_result = RunInitialization();
@@ -980,6 +981,7 @@ bool Estimator::RunInitialization() {
     PairTimeLaserTransform laser_trans_i, laser_trans_j;
     Vector3d sum_g;
 
+    // 计算每帧间的平均加速度，并求和
     for (size_t i = 0; i < estimator_config_.window_size;
          ++i) {
       laser_trans_j = all_laser_transforms_[i + 1];
@@ -1010,7 +1012,7 @@ bool Estimator::RunInitialization() {
 
     DLOG(INFO) << "IMU variation: " << var;
 
-    // 需要有足够的运动，即方差足够大，才返回true
+    // 需要有足够的激励，即方差足够大，才返回true
     if (var < 0.25) {
       ROS_INFO("IMU excitation not enough!");
       return false;

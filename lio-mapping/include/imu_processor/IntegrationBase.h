@@ -241,9 +241,11 @@ class IntegrationBase {
 
       //step_jacobian = F;
       //step_V = V;
-      // 雅可比
+      // 当前帧的雅可比 也有传递吗？？？
       jacobian_ = F * jacobian_;
-      // 协方差是 如下形式 
+      // 协方差传递 如下形式 
+      // dx(k+1) = F * dx(k) + V * noise
+      // 所以协方差矩阵  cov(k+1) = F * cov(k) * F.inv + V * noise * V.inv
       covariance_ = F * covariance_ * F.transpose() + V * noise_ * V.transpose();
     }
 
